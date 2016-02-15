@@ -1,0 +1,15 @@
+name = Referral
+description = Enables referrers to register and submit details of potential cases.
+
+stylesheets[all][] = referral.css
+
+dependencies[] = entity
+dependencies[] = ctools
+dependencies[] = date
+dependencies[] = views
+dependencies[] = pathauto
+dependencies[] = token
+dependencies[] = case_management
+
+core = 7.x
+version = 7.x-0.1-dev

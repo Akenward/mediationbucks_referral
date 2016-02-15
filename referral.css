@@ -1,0 +1,32 @@
+/* Styling for My Availability form elements and containers */ 
+input#edit-first-name, input#edit-last-name {
+	width: 125px;
+	margin-right: 30px;
+}
+
+input#edit-phone, input#edit-mobile,
+input#edit-first-name, input#edit-last-name {
+	width: 150px;
+	margin-right: 30px;
+}
+
+input#edit-email1, input#edit-email2 {
+	width: 250px;
+	margin-right: 30px;
+}
+
+select.organisation-cascade {
+	width: 250px;
+	clear: left;
+}
+
+.form-item-last-name, .form-item-first-name, .form-item-phone, .form-item-mobile,
+.form-item-email1, .form-item-email2 {
+	float: left;
+	display: inline-block;
+	padding-bottom: 30px;
+}
+
+.form-item-contact-label, .form-item-email1, #cascade-div, .form-item-email2 {
+	clear: left;
+}
