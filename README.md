@@ -1,2 +1,2 @@
-# mediationbucks_module
-.module file for mediation bucks
+# mediationbucks_referral
+Referral module for Mediation Bucks
