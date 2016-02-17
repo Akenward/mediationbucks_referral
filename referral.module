@@ -2,7 +2,7 @@
 function referral_menu(){
   $items = array();
   
-  //this creates a menu item and URL that will call the referrer set-up form
+  //this creates a menu item and URL that will call the referrer set-up form.  Access given to anonymous users.
   $items['referrer'] = array(
     'description' => t('A form to set up a new referrer user record.'),
     'title' => t('Referrer registration'),
@@ -12,6 +12,8 @@ function referral_menu(){
     'access callback' => '_anon_check',
   );
   
+  //menu item for "pending" acknowledgement of registration form submission.  Access given to anonymous users.
+  //"pending" means email address provided does not match the organisation's domain, so account blocked. 
   $items['registration-pending'] = array(
     'description' => t('A response indicating partial registration as a referrer.'),
     'title' => t('Registration pending'),
@@ -20,6 +22,8 @@ function referral_menu(){
     'access callback' => '_anon_check',
   );
   
+  //menu item for "confirmed" acknowledgement of registration form submission.  Access given to anonymous users.
+  //"confirmed" means email address provided matches the organisation's domain, so account can be activated immediately. 
   $items['registration-confirmed'] = array(
     'description' => t('A response indicating complete registration as a referrer.'),
     'title' => t('Registration confirmed'),
@@ -32,7 +36,7 @@ function referral_menu(){
 }
 
 /**
- * Callback functiuon to load a page, using argument title .
+ * Callback functiuon to load a page, using argument title provided as a page argument.
  */
 function _referrer_show_node($page_title) {
   $nodes = node_load_multiple(NULL, array("title" => $page_title));
@@ -41,12 +45,15 @@ function _referrer_show_node($page_title) {
 }
 
 /**
- * Callback functiuon for referrer registration - only shows for anonymous user.
+ * Callback function for referrer registration form and acknowledgement pages - only anonymous users have access.
  */
 function _anon_check() {
   return user_is_anonymous();
 }
-
+/**
+  * Implements hook_init to add the list of associated organisations to the front page.
+  * The placeholder string "-- Organisation list --" is replaced with a current list.
+*/
 function referral_init() {
   $org_vocab_object = taxonomy_vocabulary_machine_name_load('referring_organisations');
   $organisations = taxonomy_get_tree($org_vocab_object->vid, 0);
@@ -54,7 +61,7 @@ function referral_init() {
   foreach ($organisations as $org){
   	$term_wrapper = entity_metadata_wrapper('taxonomy_term', $org -> tid);
     $org_name_flag = $term_wrapper -> field_organisation_title -> value();
-	//dpm($org_name_flag);
+	// If field_organisation_title is true the taxonomy name is an actual organisation
   	if ($org_name_flag) {
   	  $org_list .= '<li>' . $org->name . '</li>';
   	}
@@ -65,18 +72,18 @@ function referral_init() {
 }
 
 /**
-	* Form to set up referrer as new user, blocked initially awaiting activation by office.
-	* Name, email, phone captured. Organisation in stages: Thames Valley Police -> station; 
- 	* local authority -> authority name -> function; housing association -> association name.  
-    * Additional police stations, authority functions and housing associations may be added.
+  * Form to set up referrer as new user.
+  * Name, email, phone captured. Organisation in stages: Thames Valley Police -> station; 
+  * local authority -> authority name -> function; housing association -> association name.  
+  * Additional police stations, authority functions and housing associations may be added via
+  * "referring_organisations" taxonomy.
 */
-
 function referrer_setup ($form, &$form_state) {
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
 
-  // Intro
+  // Intro text
   $form['intro_text'] = array(
     '#markup' => t('<em>Provide your contact information below and press the "Register" button to open a referrer account.</em><br/>'),
     '#weight' => '0',
@@ -143,7 +150,7 @@ function referrer_setup ($form, &$form_state) {
   $close_downstream = false;
   
   //Set up a container form element to provide an AJAX target that
-  //enables update of all levels of the taxonomy hierarchy
+  //enables update of all levels of the organisation taxonomy
   $form['cascade'] = array(
     '#type' => 'container',
 	'#weight' => '18',
@@ -151,15 +158,15 @@ function referrer_setup ($form, &$form_state) {
     '#suffix' => '</div>',
   );
     
-  // Loop down the hierarchy until you get to a select box with no option 
-  // selected or a taxonomy term with no children (in which case activate
-  // the submit button)	
+  // Loop down the taxonomy hierarchy until you get to a select box with no option 
+  // selected or a taxonomy term with no children.  In the latter case activate
+  // the submit button.
   $i = 1;
   do {
     if ($i == 1 
         || (isset($form_state['values']['organisation_' . ($i-1)]) 
         && $form_state['values']['organisation_' . ($i-1)] != "")) {
-  	  if ($i < 2) {
+  	  if ($i == 1) {
   	  	// initialise by finding the unique root term for the taxonomy 
   	  	$org_vocab_object = taxonomy_vocabulary_machine_name_load('referring_organisations');
         $org_vocab_0 = taxonomy_get_tree($org_vocab_object->vid, 0, $max_depth = 1, FALSE);
@@ -169,7 +176,8 @@ function referrer_setup ($form, &$form_state) {
 	  	// work from the taxonomy term selected at the previous level
 	  	$org_type_tid = $form_state['values']['organisation_' . ($i-1)];
 	  }
-	  $control_title =  taxonomy_term_load($org_type_tid)->field_child_title['und'][0]['value'];
+	  $term_wrapper = entity_metadata_wrapper('taxonomy_term', $org_type_tid);
+	  $control_title =  $term_wrapper->field_child_title->value(array('sanitize' => TRUE));
 	  // If the previously selected taxonomy term has child terms, set up another control to select one
 	  if (isset($control_title)&& $control_title != "") {
 	  	$org_names = org_names('referring_organisations', $org_type_tid);
@@ -212,14 +220,13 @@ function referrer_setup ($form, &$form_state) {
       }
     }
     else {
-      // If an option has not been chosen at the next level up, it means than the user has reset their
+      // If an option has not been chosen at the next level up, it means that the user has reset their
       // choice to the default value.  We don't need a control at this level until they've made a new
       // selection at that level and we can exit the loop.
       $close_downstream = true;
     }
 	$i++ ;
   } while (!$close_downstream);
-  
   return $form;
 }
 
@@ -234,7 +241,6 @@ function cascade_callback($form, $form_state) {
  * Helper function to generate the array of options corresponding to taxonomy child elements
  * @taxonomy_name: the machine name of the taxonomy we're working with
  * @type_tid: the parent taxonomy tid
- *   
  */
 function org_names ($taxonomy_name, $type_tid ) {
   $org_vocab_object = taxonomy_vocabulary_machine_name_load($taxonomy_name);
@@ -246,6 +252,10 @@ function org_names ($taxonomy_name, $type_tid ) {
   return $org_names;
 }
 
+/**
+ * Validation function for referrer_setup form
+ *
+ */
 function referrer_setup_validate ($form, &$form_state){
   //email addresses match
   if ($form_state['values']['email1'] != $form_state['values']['email2'] ) {
@@ -263,6 +273,7 @@ function referrer_setup_validate ($form, &$form_state){
   if (user_load_by_mail($form_state['values']['email1'])) {
   	form_set_error('email1', t('There is already a Mediation Bucks referrer with this email address'));
   }
+
   // First name format
   $value = $form_state['values']['first_name'];
   $regex = '/^[A-Za-z- ]+$/';
@@ -279,7 +290,7 @@ function referrer_setup_validate ($form, &$form_state){
  
   //At least one phone number
   if ($form_state['values']['first_name'] == NULL && $form_state['values']['last_name'] == NULL) {
-  	form_set_error('last_name', t('Provide at least one contact number'));
+  	form_set_error('mobile', t('Provide at least one contact number'));
   }
   
   //Phone number has correct format
@@ -291,6 +302,7 @@ function referrer_setup_validate ($form, &$form_state){
   	'/\+/',
   	'/\-/',
 	);
+	// strip out spaces, brackets, "+" and "-"
   	$value = preg_replace($pattern, '', $form_state['values']['phone']);
     $regex = '/^((44)|0)[0-9]{8,10}((Xt|XT|xT|Xt)[0-9]{1,6})?$/';
     if (!preg_match($regex, $value)) {
@@ -307,16 +319,19 @@ function referrer_setup_validate ($form, &$form_state){
   	'/\+/',
   	'/\-/',
 	);
+  	// strip out spaces, brackets, "+" and "-"
   	$value = preg_replace($pattern, '', $form_state['values']['mobile']);
     $regex = '/^(07[\d]{8,12}|447[\d]{7,11})$/';
     if (!preg_match($regex, $value)) {
       form_set_error('mobile', t('Incorrect format for UK mobile number'));
     }
   }
-  
-  
 }
 
+/**
+ * Submit function for referrer_setup form
+ *
+ */
 function referrer_setup_submit ($form, &$form_state){
   $first_name = $form_state['values']['first_name'];
   $last_name = $form_state['values']['last_name'];
@@ -324,6 +339,8 @@ function referrer_setup_submit ($form, &$form_state){
   $mobile = $form_state['values']['mobile'];
   $email = $form_state['values']['email1'];
   
+  // Iterate from the top of the organisation hierarchy to the users final choice and
+  // find the last (lowest) non-blank regex for the organisation's email domain 
   $org_vocab_object = taxonomy_vocabulary_machine_name_load('referring_organisations');
   $org_vocab_0 = taxonomy_get_tree($org_vocab_object->vid, 0, $max_depth = 1, FALSE);
   $term = $org_vocab_0[0]->tid;
@@ -343,7 +360,10 @@ function referrer_setup_submit ($form, &$form_state){
 	  }
     }
   }
-    
+  
+  // Set up the user's name by stripping spaces and hyphens from first and last name,
+  // changing all remaining to lower case and combining them with a "." separator.
+  // If this has already been used, add a 1,2,3 ... to the end - lowest suffix value for uniqueness.  
   $regex = array(
    '/ /',
    '/\-/',
@@ -361,9 +381,12 @@ function referrer_setup_submit ($form, &$form_state){
   }
   $name = $name . $i;
   
-  //This will generate a random password, you could set your own here
+  // This will generate a random password.
   $password = user_password(8);
   
+  // If the email address matches the domain for the selected organisation
+  // the account can be set live immediately.  Otherwise the user's status
+  // with the organisation will need to be checked before they can use the account
   $account_status = preg_match('/' . $domain_regex . '/', $email);
   //set up the user fields
   $fields = array(
@@ -380,9 +403,7 @@ function referrer_setup_submit ($form, &$form_state){
   //the first parameter is left blank so a new user is created
   $account = user_save('', $fields);
  
-  // If you want to send the welcome email, use the following code
- 
-  // Manually set the password so it appears in the e-mail.
+  // Update the custom fields, password 
   $account->password = $fields['pass'];
   $account_wrapper = entity_metadata_wrapper('user', $account);
   $account_wrapper->field_phone->set($phone);
@@ -392,9 +413,8 @@ function referrer_setup_submit ($form, &$form_state){
   $account_wrapper->field_organisation->set($organisation);
   $account_wrapper->save();
  
-  $form_state['account_status'] = $account_status;
- 
-  // Send the e-mail through the user module.
+  // Send the e-mail through the user module if the account status is live
+  // Display an acknowledgement page relevant to account status 
   if ($account_status) {
     drupal_mail('user', 'register_no_approval_required', $email, NULL, array('account' => $account), variable_get('site_mail'));
     $form_state['redirect'] = 'registration-confirmed';
