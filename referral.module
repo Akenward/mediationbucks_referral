@@ -7,8 +7,8 @@ function referral_menu(){
     'description' => t('A form to set up a new referrer user record.'),
     'title' => t('Referrer registration'),
     'menu_name' => 'main-menu',
-    'page callback' => 'drupal_get_form', //this is the function that will be called when the page is accessed.  for a form, use drupal_get_form
-    'page arguments' => array('referrer_setup'), //the name of the form here
+    'page callback' => 'drupal_get_form', //this is the function that will be called when the page is accessed.
+    'page arguments' => array('referrer_setup'),
     'access callback' => '_anon_check',
   );
   
@@ -17,7 +17,7 @@ function referral_menu(){
   $items['registration-pending'] = array(
     'description' => t('A response indicating partial registration as a referrer.'),
     'title' => t('Registration pending'),
-    'page callback' => '_referrer_show_node', //this is the function that will be called when the page is accessed.  for a form, use drupal_get_form
+    'page callback' => '_referrer_show_node', //this is the function that will be called when the page is accessed. 
     'page arguments' => array('Registration pending'),
     'access callback' => '_anon_check',
   );
@@ -27,9 +27,18 @@ function referral_menu(){
   $items['registration-confirmed'] = array(
     'description' => t('A response indicating complete registration as a referrer.'),
     'title' => t('Registration confirmed'),
-    'page callback' => '_referrer_show_node', //this is the function that will be called when the page is accessed.  for a form, use drupal_get_form
+    'page callback' => '_referrer_show_node', //this is the function that will be called when the page is accessed.
     'page arguments' => array('Registration confirmed'),
     'access callback' => '_anon_check',
+  );
+  
+  $items['dispute_referral'] = array(
+    'description' => t('a tabbed form to capture details of a potential case'),
+    'title' => t('Dispute referral'),
+    'menu_name' => 'main-menu',
+    'page callback' => 'drupal_get_form', //this is the function that will be called when the page is accessed.
+    'page arguments' => array('dispute_referral', '1'), //the name of the form here
+    'access arguments' => array('create referrals'),
   );
   
   return $items;
@@ -50,6 +59,25 @@ function _referrer_show_node($page_title) {
 function _anon_check() {
   return user_is_anonymous();
 }
+
+/**
+ * Implements hook_permission().
+ */
+function referral_permission(){
+  return array(
+    'create referrals' =>  array(
+      'title' => t('Create referrals'),
+    ),
+    'view referrals' => array(
+      'title' => t('View referrals'),
+    ),
+    'delete referrals' => array(
+      'title' => t('Delete referrals'),
+    ),
+  );
+}
+
+
 /**
   * Implements hook_init to add the list of associated organisations to the front page.
   * The placeholder string "-- Organisation list --" is replaced with a current list.
@@ -422,4 +450,162 @@ function referrer_setup_submit ($form, &$form_state){
   else {
   	$form_state['redirect'] = 'registration-pending';
   }
+}
+
+function dispute_referral($form, &$form_state, $page_no = '1') {
+  
+  if (isset($form_state['triggering_element']['#value']) && $form_state) {
+  	if ($form_state['triggering_element']['#value'] == 'next' && $form_state['values']['page_no'] <= 3) {
+  	  $page_no = $form_state['values']['page_no'] + 1;
+  	}
+  	if ($form_state['triggering_element']['#value'] == 'previous' && $form_state['values']['page_no'] >= 2) {
+  	  $page_no = $form_state['values']['page_no'] - 1;
+  	}
+  	$form['tab-content']['page_no'] = array(
+	  '#type' => 'value',
+	  '#value' => $page_no,
+	  '#parents' => array('page_no'),
+    );
+  	form_set_value($form['tab-content']['page_no'], strval($page_no), $form_state);
+  }
+  else {
+    if (isset($form_state['values']['page_no'])) {
+  	  $page_no = $form_state['values']['page_no'];
+    }
+	$form['tab-content']['page_no'] = array(
+	  '#type' => 'value',
+	  '#value' => $page_no,
+	  '#parents' => array('page_no'),
+    );
+  }
+  
+  $form['#prefix'] = '<div id = "main-wrapper" class = "tabbed-box">';
+  $form['#suffix'] = '</div>';
+  
+  $form['title'] =array(
+    '#markup' => '<h4>Refer a dispute <small>to Mediation Bucks</small></h4>',
+    '#weight' => '-2',
+    '#prefix' => '<div class = "tab-title">',
+    '#suffix' => '</div>',
+  );
+  $form['tab_header'] = array(
+    '#markup' => '<div class = "tabbed-area">',
+    '#weight' => '-1',
+  );
+  $form['tab_links'] = array(
+    '#markup' => '<li><a href="" id="tab_1" class="active">Outline</a></li>
+                  <li><a href="" id="tab_2" class="active">Parties</a></li>
+                  <li><a href="" id="tab_3" class="active">Features</a></li>
+                  <li><a href="" id="tab_4" class="active">Agencies</a></li>',
+    '#weight' => '0',
+    '#prefix' => '<div class = "tabs"><ul>',
+    '#suffix' => '</ul></div>',
+  );
+  $form['tab_content'] = array(
+    '#type' => 'container',
+    '#weight' => '1',
+    '#prefix' => '<div id="tab-content">',
+    '#suffix' => '</div>',
+  );
+  $form['tab_content']['tab_1'] = array (
+    '#type' => 'container',
+    '#weight' => '1',
+    '#prefix' => '<div id="content-1" class="content">',
+    '#suffix' => '</div>',
+  );
+  $form['tab_content']['tab_1']['marker'] = array (
+    '#markup' => 'This is tab 1 content',
+  );
+  if ($page_no != 1) {
+  	$form['tab_content']['tab_1']['#type'] = 'hidden';
+  }
+  
+  $form['tab_content']['tab_2'] = array (
+    '#type' => 'container',
+    '#weight' => '2',
+    '#prefix' => '<div id="content-2" class="content">',
+    '#suffix' => '</div>',
+  );
+  $form['tab_content']['tab_2']['marker'] = array (
+    '#markup' => 'This is tab 2 content',
+  );
+  if ($page_no != 2) {
+  	$form['tab_content']['tab_2']['#type'] = 'hidden';
+  }
+  
+  $form['tab_content']['tab_3'] = array (
+    '#type' => 'container',
+    '#weight' => '3',
+    '#prefix' => '<div id="content-3" class="content">',
+    '#suffix' => '</div>',
+  );
+  $form['tab_content']['tab_3']['marker'] = array (
+    '#markup' => 'This is tab 3 content',
+  );
+  if ($page_no != 3) {
+  	$form['tab_content']['tab_3']['#type'] = 'hidden';
+  }
+  
+  $form['tab_content']['tab_4'] = array (
+    '#type' => 'container',
+    '#weight' => '4',
+    '#prefix' => '<div id="content-4" class="content">',
+    '#suffix' => '</div>',
+  );
+  $form['tab_content']['tab_4']['marker'] = array (
+    '#markup' => 'This is tab 4 content',
+  );
+  if ($page_no != 4) {
+  	$form['tab_content']['tab_4']['#type'] = 'hidden';
+  }
+  
+  if ($page_no >= 2) {
+    $form['tab_content']['previous'] = array (
+      '#type' => 'button',
+      '#value' => 'previous',
+      '#ajax' => array(
+        'callback' => 'content_callback',
+        'wrapper' => 'tab-content',
+        'effect' => 'fade',
+      ),
+      '#weight' => 5,
+    );
+  }
+  
+  if ($page_no <=3) {
+    $form['tab_content']['next'] = array (
+      '#type' => 'button',
+      '#value' => 'next',
+      '#ajax' => array(
+        'callback' => 'content_callback',
+        'wrapper' => 'tab-content',
+        'effect' => 'fade',
+      ),
+      '#weight' => 6,
+    );
+  }
+  $form['tab_footer'] = array(
+    '#markup' => '</div>',
+    '#weight' => 5,
+  );
+  return($form);
+}
+
+function content_callback($form, &$form_state) {
+  return $form['tab_content'];
+}
+
+function dispute_referral_validate($form, &$form_state) {
+  switch ($page_no) {
+  	case 4:
+	case 3:
+	case 2:
+    case 1:
+  }
+}
+
+function dispute_referral_submit($form, &$form_state) {
+  dpm('submit');
+  $form_state['redirect'] = 'referral-complete';
+  
 }

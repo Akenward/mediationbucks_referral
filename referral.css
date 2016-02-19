@@ -30,3 +30,16 @@ select.organisation-cascade {
 .form-item-contact-label, .form-item-email1, #cascade-div, .form-item-email2 {
 	clear: left;
 }
+
+/* Styling for Referral form elements */
+
+.tabs ul li {
+    list-style:none;
+    display:inline;
+    padding-right: 10px;
+}
+
+div.tabs ul {
+	margin: 0;
+	padding: 0;
+}
