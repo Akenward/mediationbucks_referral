@@ -80,8 +80,10 @@ function dispute_referral_get_page_cache($name) {
 // If the cached object doesn't exist yet, create an empty object.
   if (!$cache) {
     $cache = new stdClass();
-    $cache->locked = ctools_object_cache_test('dispute_referral', $name);
+    $cache->locked = ctools_object_cache_test('dispute_referral', 'case_data');
   }
+    
+// If the cached object doesn't exist yet, create an empty object.
   return $cache;
 }
 
@@ -126,79 +128,21 @@ function dispute_referral_subtask_next(&$form_state) {
   
   // Set the cache status to be loaded for a new step
   $cache = dispute_referral_get_page_cache('case_data');
-  $cache['uncached'] = FALSE;
+  $cache->uncached = FALSE;
   dispute_referral_set_page_cache('case_data', $cache);
+  
   switch ($from_form){
     case 'outline':
-	  $last_values = $form_state['values'];
-      unset($last_values['form_build_id']);
-      unset($last_values['form_token']);
-      unset($last_values['form_id']);
-      unset($last_values['op']);
-      $last_values['outline_cached'] = TRUE;
-	  // Store submitted data in a ctools cache object, namespaced 'case_data'.
-      $cache = dispute_referral_get_page_cache('case_data');
-      if (is_array($cache)) {
-        dispute_referral_set_page_cache('case_data', array_merge($cache, $last_values));
-      }
-      else {
-  	    dispute_referral_set_page_cache('case_data', $last_values);
-      }
+	  cache_step($form_state);
 	  break;
 	case 'parties':
-	  $subform_key = key($form_state['inline_entity_form']);
-      $party_cache = array(
-        'field_party' => array(
-          'parties' => $form_state['inline_entity_form'][$subform_key]['entities'],
-	    ),
-      );
-      $cache = dispute_referral_get_page_cache('case_data');
-      if (is_array($cache)) {
-        dispute_referral_set_page_cache('case_data', array_merge($cache, $party_cache));
-      }
-      else {
-  	    dispute_referral_set_page_cache('case_data', $party_cache);
-      }
+	  cache_step($form_state, 'field_party');
 	  break;
 	case 'features':
-	  // Store submitted data in a ctools cache object, namespaced 'case_data'.
-      $last_values = $form_state['values'];
-      unset($last_values['form_build_id']);
-      unset($last_values['form_token']);
-      unset($last_values['form_id']);
-      unset($last_values['op']);
-      $last_values['features_cached'] = TRUE;
-      $cache = dispute_referral_get_page_cache('case_data');
-      if (is_array($cache)) {
-        dispute_referral_set_page_cache('case_data', array_merge($cache, $last_values));
-      }
-      else {
-  	    dispute_referral_set_page_cache('case_data', $last_values);
-      } 
+	  cache_step($form_state);
 	  break;
 	case 'agencies':
-	  // Store submitted data in a ctools cache object, namespaced 'case_data'.
-      $last_values = $form_state['values'];
-      unset($last_values['form_build_id']);
-      unset($last_values['form_token']);
-      unset($last_values['form_id']);
-      unset($last_values['op']);
-      $last_values['agencies_cached'] = TRUE;
-	    
-	  $subform_key = key($form_state['inline_entity_form']);
-      $contact_cache = array(
-        'field_agency_contacts' => array(
-          'contacts' => $form_state['inline_entity_form'][$subform_key]['entities'],
-	    ),
-      );
-      $cache = dispute_referral_get_page_cache('case_data');
-      if (is_array($cache)) {
-        dispute_referral_set_page_cache('case_data', array_merge($cache, $last_values, $contact_cache));
-      }
-      else {
-  	    dispute_referral_set_page_cache('case_data', array_merge($last_values, $contact_cache));
-      }
-	  $cache = dispute_referral_get_page_cache('case_data');
+	  cache_step($form_state, 'field_agency_contacts');
 	  break;
   }
 }
@@ -217,6 +161,8 @@ function dispute_referral_subtask_cancel(&$form_state) {
   }
   // Clear our ctools cache object. It's good housekeeping.
   dispute_referral_clear_page_cache('case_data');
+  unset($form_state['referral_object']);
+  
   $form_state['rebuild'] = TRUE;
 }
 
@@ -225,6 +171,10 @@ function dispute_referral_subtask_cancel(&$form_state) {
 */
 function dispute_referral_subtask_finish(&$form_state) {
   global $user;
+  
+  // Agencies, the last step, is most likely not in cache as this is done
+  // after a move to another step.  So we do the save here.
+  //cache_step(&$form_state, 'field_agency_contacts');
   
   $u_wrapper = entity_metadata_wrapper('user', $user);
   
@@ -238,7 +188,6 @@ function dispute_referral_subtask_finish(&$form_state) {
     'promote' => 0,
   );
   $entity = entity_create('node', $node_values);
-
   // Now create an entity_metadata_wrapper around the new node entity
   // to make getting and setting values easier
   $ewrapper = entity_metadata_wrapper('node', $entity);
@@ -253,7 +202,7 @@ function dispute_referral_subtask_finish(&$form_state) {
 
   // Setting the body is a bit different from other properties or fields
   // because the body can have both its complete value and its summary
-  $ewrapper->body->set(array('value' => $cache['dispute_summary']));
+  $ewrapper->body->set(array('value' => $cache->dispute_summary));
 
   $referred_date = new DateTime();
   $entity->field_referred_date[LANGUAGE_NONE][0] = array(
@@ -262,7 +211,7 @@ function dispute_referral_subtask_finish(&$form_state) {
     'timezone_db' => date_default_timezone(),
   );
 
-  $origin_date = new DateTime($cache['dispute_age']);
+  $origin_date = new DateTime($cache->dispute_age);
   $entity->field_origin_date[LANGUAGE_NONE][0] = array(
     'value' => date_format($origin_date, 'Y-m-d'),
     'timezone' => drupal_get_user_timezone(),
@@ -276,9 +225,9 @@ function dispute_referral_subtask_finish(&$form_state) {
   $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
   array_walk($tree, '_cut_down_to_tids');
   $factor_tids = array();
-  foreach($cache['dispute_factors'] as $key => $setting) {
+  foreach($cache->dispute_factors as $key => $setting) {
     if (is_string($setting)) {
-  	  $factor_tids[] = $tree[$key];
+  	  $factor_tids[] = $tree[$key - 1];
     }
   }
   $ewrapper->field_factor_summary->set($factor_tids);
@@ -287,41 +236,45 @@ function dispute_referral_subtask_finish(&$form_state) {
   $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
   array_walk($tree, '_cut_down_to_tids');
   $agency_tids = array();
-  foreach($form_state['values']['agencies_involved'] as $key => $setting) {
+  foreach($cache->agencies_involved as $key => $setting) {
     if (is_string($setting)) {
-  	  $agency_tids[] = $tree[$key];
+  	  $agency_tids[] = $tree[$key - 1];
     }
   }
   $ewrapper->field_agencies_involved->set($agency_tids);
-  foreach (current($cache['field_issues']) as $key=>$value){
+  
+  foreach (current($cache->field_issues) as $key=>$value){
   	if (is_array($value) && isset($value['value']) && is_string($value['value']) && $value['value'] != '') {
   	  $ewrapper->field_issues[] = $value['value'];
 	}
   }
-  $ewrapper->field_party_actions->set($cache['action_parties']);
-  $ewrapper->field_agency_actions->set($cache['action_agencies']);
-  $ewrapper->field_violence_summary->set($cache['dispute_violence']);
-  $ewrapper->field_violence_details->set($cache['dispute_violence_details']);
-  $ewrapper->field_asb_summary->set($cache['dispute_asb']);
-  $ewrapper->field_asb_details->set($cache['dispute_asb_details']);
-  $ewrapper->field_factor_details->set($cache['dispute_factors_details']);
-
+  
+  $ewrapper->field_party_actions->set($cache->action_parties);
+  $ewrapper->field_agency_actions->set($cache->action_agencies);
+  $ewrapper->field_violence_summary->set($cache->dispute_violence);
+  $ewrapper->field_violence_details->set($cache->dispute_violence_details);
+  $ewrapper->field_asb_summary->set($cache->dispute_asb);
+  $ewrapper->field_asb_details->set($cache->dispute_asb_details);
+  $ewrapper->field_factor_details->set($cache->dispute_factors_details);
+  
   $parties_list = array();
-  foreach ($cache['field_party']['parties'] as $key => $entity_def) {
+  foreach ($cache->field_party as $key => $entity_def) {
   	$p_entity = entity_create('node', (array)$entity_def['entity']);
     $p_wrapper = entity_metadata_wrapper('node', $p_entity);
 	$p_wrapper->save();
 	$parties_list[] = array('target_id' => intval($p_wrapper->nid->value()));
 	$ewrapper->field_party->set($parties_list); 
   }
+  
   $contacts_list = array();
-  foreach (current($form_state['inline_entity_form'])['entities'] as $key => $entity_def) {
+  foreach ($cache->field_agency_contacts as $key => $entity_def) {
   	$c_entity = entity_create('node', (array)$entity_def['entity']);
     $c_wrapper = entity_metadata_wrapper('node', $c_entity);
 	$c_wrapper->save();
 	$contacts_list[] = array('target_id' => intval($c_wrapper->nid->value()));
 	$ewrapper->field_agency_contacts->set($contacts_list); 
   }
+  
   $ewrapper->save();
  
   //Delete any attached nodes
@@ -353,42 +306,39 @@ function referral_outline_form($form, &$form_state) {
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
-  
-  //get the saved stuff out of cache
   $cache = dispute_referral_get_page_cache('case_data');
-  if (is_array($cache) && isset($cache['outline_cached']) && !$cache['uncached']) {
-  	if (isset($form_state['values'])){
-  	  $form_state['values'] = array_merge($form_state['values'], $cache);
-    }
-    else {
-      $form_state['values'] = $cache;
-    }
-	$cached = TRUE;
+  if (!isset($cache->uncached)) {
+  	$cache->uncached = TRUE;
+  	dispute_referral_set_page_cache('case_data', $cache);
   }
-  else {
-  	$cache['uncached'] = TRUE;
-  	$cached = FALSE;
-  }
+  
+  // Set up control for dispute summary and get saved value from [referral_object]
+  // if it exists and if this is the first display of the form for this step
   $form['dispute_summary'] = array(
     '#type' => 'textarea',
     '#title' => t('Summary of dispute'),
     '#weight' => '1',
+    '#default_value' => _fetch_default_value('dispute_summary', $cache, $form_state, ''),
   );
-  $form['dispute_summary']['#default_value'] = ($cached) ? $form_state['values']['dispute_summary'] : '';
   
+  // Set up control for dispute age and get saved value from [referral_object]
+  // if it exists and if this is the first display of the form for this step
   $form['dispute_age'] = array(
-   '#type' => 'date_select', // types 'date_text' and 'date_timezone' are also supported. See .inc file.
-   '#title' => t('Dispute started (if known)'),
-   '#default_value' => NULL, 
-   '#date_format' => 'Y-m',
-   '#date_timezone' => 'Europe/London', // Optional, if your date has a timezone other than the site timezone.
-   '#date_year_range' => '-20:0', // Optional, used to set the year range (back 3 years and forward 3 years is the default).
-   '#weight' => '2',
+    '#type' => 'date_select', // types 'date_text' and 'date_timezone' are also supported. See .inc file.
+    '#title' => t('Dispute started (if known)'),
+    '#default_value' => NULL, 
+    '#date_format' => 'Y-m',
+    '#date_timezone' => 'Europe/London', // Optional, if your date has a timezone other than the site timezone.
+    '#date_year_range' => '-20:0', // Optional, used to set the year range (back 3 years and forward 3 years is the default).
+    '#weight' => '2',
+    '#default_value' => _fetch_default_value('dispute_age', $cache, $form_state),
   );
-  $form['dispute_age']['#default_value'] = ($cached) ? $form_state['values']['dispute_age'] : NULL ;
   
-  if ($cached) {
-  	$items = $form_state['values']['field_issues'][$lang_name];
+  // Set up control for dispute issues and get saved value from [referral_object]
+  // if it exists and if this is the first display of the form for this step
+  $items = _fetch_default_value('field_issues', $cache, $form_state);
+  if (is_array($items)) {
+	$items = current($items);
 	unset ($items['add_more']);
 	$items = array_filter($items, function($e){
   	  return(is_array($e) && is_string($e['value']) && $e['value'] != '');
@@ -398,26 +348,32 @@ function referral_outline_form($form, &$form_state) {
   	$items = NULL;
 	$max_delta = 0;
   }
-  
   $instance = field_info_instance('node', 'field_issues', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
   $form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   $form_element['field_issues']['#weight'] = '3';
   $form = array_merge($form, $form_element);
   
+  // Set up control for action_parties and get saved value from [referral_object]
+  // if it exists and if this is the first display of the form for this step
   $form['action_parties'] = array(
     '#type' => 'textarea',
     '#title' => t('Action taken by parties to resolve'),
     '#weight' => '4',
+    '#default_value' => _fetch_default_value('action_parties', $cache, $form_state, ''),
   );
-  $form['action_parties']['#default_value'] = ($cached) ? $form_state['values']['action_parties'] : '';
   
+  // Set up control for action_agencies and get saved value from [referral_object]
+  // if it exists and if this is the first display of the form for this step
   $form['action_agencies'] = array(
     '#type' => 'textarea',
     '#title' => t('Action taken by agencies'),
     '#weight' => '5',
+    '#default_value' => _fetch_default_value('action_agencies', $cache, $form_state, ''),
   );
-  $form['action_agencies']['#default_value'] = ($cached) ? $form_state['values']['action_agencies'] : '';
+  
+  $cache->uncached = TRUE;
+  dispute_referral_set_page_cache('case_data', $cache);
   return $form;
 }
 
@@ -456,25 +412,31 @@ function referral_parties_form($form, &$form_state) {
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
-  
-  dpm($form_state);
+  $cache = dispute_referral_get_page_cache('case_data');
+  if (!isset($cache->uncached)) {
+  	$cache->uncached = TRUE;
+  	dispute_referral_set_page_cache('case_data', $cache);
+  }
   
   $items = NULL;
   $instance = field_info_instance('node', 'field_party', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
-  $cache = dispute_referral_get_page_cache('case_data');
   if (!isset($form_state['inline_entity_form'])) {
   	$form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   }
   $sub_key = key($form_state['inline_entity_form']);
-  if (is_array($cache) && isset($cache['field_party']) && !$cache['uncached']) {
-	$form_state['inline_entity_form'][$sub_key]['entities'] = $cache['field_party']['parties'];
-	$cache['uncached'] = TRUE;
+  if ($parties = _fetch_default_value('field_party', $cache, $form_state)) {
+	if (in_array('entity', current($parties))){
+      $form_state['inline_entity_form'][$sub_key]['entities'] = $parties;
+	}
   }
   $form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   $form_element['field_party']['#weight'] = '1';
   $form = array_merge($form, $form_element);
+  
+  $cache->uncached = TRUE;
   dispute_referral_set_page_cache('case_data', $cache);
+  
   return $form;
 }
 
@@ -533,20 +495,10 @@ function referral_features_form($form, &$form_state) {
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
-  
   $cache = dispute_referral_get_page_cache('case_data');
-  if (is_array($cache) && isset($cache['features_cached']) && !$cache['uncached']) {
-  	if (isset($form_state['values'])){
-  	  $form_state['values'] = array_merge($form_state['values'], $cache);
-    }
-    else {
-      $form_state['values'] = $cache;
-	}
-    $cached = TRUE;
-  }
-  else {
-  	$cache['uncached'] = TRUE;
-  	$cached = FALSE;
+  if (!isset($cache->uncached)) {
+  	$cache->uncached = TRUE;
+  	dispute_referral_set_page_cache('case_data', $cache);
   }
   
   $form['dispute_violence'] = array(
@@ -559,8 +511,8 @@ function referral_features_form($form, &$form_state) {
       'threats' => t('Threatened'), 
       'no' => t('No'),
     ),
+    '#default_value' => _fetch_default_value('dispute_violence', $cache, $form_state),
   );
-  $form['dispute_violence']['#default_value'] = ($cached) ? $form_state['values']['dispute_violence'] : '';
   
   $form['dispute_violence_details'] = array(
     '#type' => 'textarea',
@@ -572,8 +524,8 @@ function referral_features_form($form, &$form_state) {
 	    array("select[id='edit-dispute-violence']" => array('value' => 'threats')),
 	  ),
     ),
+    '#default_value' => _fetch_default_value('dispute_violence_details', $cache, $form_state, ''),
   );
-  $form['dispute_violence_details']['#default_value'] = ($cached) ? $form_state['values']['dispute_violence_details'] : '';
   
   $form['dispute_asb'] = array(
     '#type' => 'select',
@@ -584,8 +536,8 @@ function referral_features_form($form, &$form_state) {
       'yes' => t('Yes'), 
       'no' => t('No'),
     ),
+    '#default_value' => _fetch_default_value('dispute_asb', $cache, $form_state),
   );
-  $form['dispute_asb']['#default_value'] = ($cached) ? $form_state['values']['dispute_asb'] : '';
   
   $form['dispute_asb_details'] = array(
     '#type' => 'textarea',
@@ -594,23 +546,25 @@ function referral_features_form($form, &$form_state) {
     '#states' => array(
       'visible' => array(
 	    "select[id='edit-dispute-asb']" => array('value' => 'yes'),
-	  ),
+	  ), 
     ),
+    '#default_value' => _fetch_default_value('dispute_asb_details', $cache, $form_state, ''),
   );
-  $form['dispute_asb_details']['#default_value'] = ($cached) ? $form_state['values']['dispute_asb_details'] : '';
   
   $vocab = taxonomy_vocabulary_machine_name_load('dispute_factors');
   $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
   array_walk($tree, '_cut_down_to_names');
+  $tree = array_combine(range(1, count($tree)), array_values($tree));
+  $null_tree = $tree;
+  array_walk($null_tree, '_unset_to_zeros');
   $form['dispute_factors'] = array(
     '#type' => 'checkboxes',
     '#title' => t('Factors'),
     '#weight' => '5',
     '#options' => $tree,
     '#description' => 'Indicate which (if any) are factors in this dispute.',
+    '#default_value' => _fetch_default_value('dispute_factors', $cache, $form_state, $null_tree),
   );
-  array_walk($tree, '_unset_to_zeros');
-  $form['dispute_factors']['#default_value'] = ($cached) ? $form_state['values']['dispute_factors'] : $tree;
   
   $form['dispute_factors_details'] = array(
     '#type' => 'textarea',
@@ -626,9 +580,11 @@ function referral_features_form($form, &$form_state) {
 	    array(':input[name="dispute_factors[4]"]' => array('checked' => TRUE)),
 	  ),
     ),
+    '#default_value' => _fetch_default_value('dispute_factors_details', $cache, $form_state, ''),
   );
   
-  $form['dispute_factors_details']['#default_value'] = ($cached) ? $form_state['values']['dispute_factors_details'] : '';
+  $cache->uncached = TRUE;
+  dispute_referral_set_page_cache('case_data', $cache);
   
   return $form;
 }
@@ -651,37 +607,26 @@ function referral_agencies_form($form, &$form_state) {
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
-  
   $cache = dispute_referral_get_page_cache('case_data');
-  if (is_array($cache) && isset($cache['agencies_cached']) && !$cache['uncached']) {
-  	if (isset($form_state['values'])){
-  	  $form_state['values'] = array_merge($form_state['values'], $cache);
-    }
-    else {
-      $form_state['values'] = $cache;
-	}
-    $cached = TRUE;
+  if (!isset($cache->uncached)) {
+  	$cache->uncached = TRUE;
+  	dispute_referral_set_page_cache('case_data', $cache);
   }
-  else {
-  	$cache['uncached'] = TRUE;
-  	$cached = FALSE;
-  }
+  
   $vocab = taxonomy_vocabulary_machine_name_load('dispute_agencies');
   $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
   array_walk($tree, '_cut_down_to_names');
-  
+  $tree = array_combine(range(1, count($tree)), array_values($tree));
+  $other_key = array_search ( 'Other' , $tree );
+  $null_tree = $tree;
+  array_walk($null_tree, '_unset_to_zeros');
   $form['agencies_involved'] = array(
     '#type' => 'checkboxes',
     '#title' => 'Agencies involved',
     '#weight' => '1',
     '#options' => $tree,
+    '#default_value' => _fetch_default_value('agencies_involved', $cache, $form_state, $null_tree),
   );
-  
-  array_walk($tree, function(&$value, $key){
-  	$value = 0;
-  });
-  
-  $form['agencies_involved']['#default_value'] = ($cached) ? $form_state['values']['agencies_involved'] : $tree;
   
   $form['other_agency_name'] = array(
     '#type' => 'textfield',
@@ -689,9 +634,10 @@ function referral_agencies_form($form, &$form_state) {
     '#weight' => '2',
     '#states' => array(
       'visible' => array(
-        ':input[name="agencies_involved[9]"]' => array('checked' => TRUE),
+        ':input[name="agencies_involved[' . $other_key .']"]' => array('checked' => TRUE),
 	  ),
     ),
+    '#default_value' => _fetch_default_value('other_agency_name', $cache, $form_state, ''),
   );
   
   $form['agency_contact_intro'] = array(
@@ -699,24 +645,29 @@ function referral_agencies_form($form, &$form_state) {
     '#weight' => '3',
   );
   
-  $form['other_agency_name']['#default_value'] = ($cached) ? $form_state['values']['other_agency_name'] : '';
-  
   $items = NULL;
   $instance = field_info_instance('node', 'field_agency_contacts', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
-  $cache = dispute_referral_get_page_cache('case_data');
   if (!isset($form_state['inline_entity_form'])) {
   	$form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   }
   $sub_key = key($form_state['inline_entity_form']);
-  if (is_array($cache) && isset($cache['field_agency_contacts']) && !$cache['uncached']) {
-	$form_state['inline_entity_form'][$sub_key]['entities'] = $cache['field_agency_contacts']['contacts'];
-	$cache['uncached'] = TRUE;
+  if ($contacts = _fetch_default_value('field_agency_contacts', $cache, $form_state)) {
+  	$form_state['inline_entity_form'][$sub_key]['entities'] = $contacts;
+  }
+  if ($contacts = _fetch_default_value('field_agency_contacts', $cache, $form_state)) {
+	if (in_array('entity', current($contacts))){
+      $form_state['inline_entity_form'][$sub_key]['entities'] = $contacts;
+	}
   }
   $form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   $form_element['field_agency_contacts']['#weight'] = '4';
   $form = array_merge($form, $form_element);
   dispute_referral_set_page_cache('case_data', $cache);
+  
+  $cache->uncached = TRUE;
+  dispute_referral_set_page_cache('case_data', $cache);
+  
   return $form;
 }
 
@@ -754,5 +705,35 @@ function _cut_down_to_tids(&$value, $key) {
 
 function _unset_to_zeros(&$value, $key) {
   $value = 0;
+}
+
+function _fetch_default_value ($field_name, $cache, $form_state, $null_value = null) {
+  if (!$cache->uncached && isset($form_state['referral_object']) && property_exists($form_state['referral_object'], $field_name)) {
+	return $form_state['referral_object']->$field_name;
+  }
+  else {
+  	return $null_value;
+  }
+}
+
+function cache_step($form_state, $entity_key = null){
+  $field_values = $form_state['values'];
+  unset($field_values['form_build_id']);
+  unset($field_values['form_token']);
+  unset($field_values['form_id']);
+  unset($field_values['op']);
+  // Store submitted data in a ctools cache object, namespaced 'case_data'.
+  $cache = dispute_referral_get_page_cache('case_data');
+  foreach ($field_values as $key => $value) {
+    $cache->$key = $value;
+  }
+  if ($entity_key) {
+    $subform_key = key($form_state['inline_entity_form']);
+	if (isset($form_state['inline_entity_form'][$subform_key]['entities'])) {
+      $cache->$entity_key = $form_state['inline_entity_form'][$subform_key]['entities'];
+	}
+  }
+  $cache->uncached = FALSE;
+  dispute_referral_set_page_cache('case_data', $cache);
 }
 
