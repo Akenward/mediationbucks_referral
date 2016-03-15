@@ -28,7 +28,7 @@ function dispute_referral_ctools_wizard($step = 'outline') {
     // Callback to use when entire form is completed.
     'finish callback' => 'dispute_referral_subtask_finish',
     // Callback to use when user clicks final submit button.
-    'return callback' => 'dispute_referral_subtask_finish',
+    'return callback' => 'dispute_referral_subtask_return',
     // Callback to use when user cancels wizard.
     'cancel callback' => 'dispute_referral_subtask_cancel',
     // Specify the order that the child forms will appear in, as well as their page titles.
@@ -116,20 +116,8 @@ function dispute_referral_clear_page_cache($name) {
 * Callback executed when the 'next' or 'back' button is clicked.
 */
 function dispute_referral_subtask_next(&$form_state) {
-  global $language;
-  $lang_name = $language->language;
-  
-  if (!isset($form['#parents'])) {
-    $form['#parents'] = array();
-  }
-  
   // Determine which form we are leaving so we can cache its data
   $from_form = $form_state['step'];
-  
-  // Set the cache status to be loaded for a new step
-  $cache = dispute_referral_get_page_cache('case_data');
-  $cache->uncached = FALSE;
-  dispute_referral_set_page_cache('case_data', $cache);
   
   switch ($from_form){
     case 'outline':
@@ -140,6 +128,11 @@ function dispute_referral_subtask_next(&$form_state) {
 	  break;
 	case 'features':
 	  cache_step($form_state);
+	  $cache = dispute_referral_get_page_cache('case_data');
+	  if (isset($cache->confirm_routed)) {
+	  	unset($cache->confirm_routed);
+	  }
+      dispute_referral_set_page_cache('case_data', $cache);
 	  break;
 	case 'agencies':
 	  cache_step($form_state, 'field_agency_contacts');
@@ -148,6 +141,7 @@ function dispute_referral_subtask_next(&$form_state) {
 }
 
 function dispute_referral_subtask_back(&$form_state) {
+	
 }
 
 /**
@@ -166,115 +160,21 @@ function dispute_referral_subtask_cancel(&$form_state) {
   $form_state['rebuild'] = TRUE;
 }
 
+function dispute_referral_subtask_return(&$form_state) {
+
+}
+
 /**
 * Callback executed when the entire form submission is finished.
 */
 function dispute_referral_subtask_finish(&$form_state) {
-  global $user;
-  
-  // Agencies, the last step, is most likely not in cache as this is done
-  // after a move to another step.  So we do the save here.
-  //cache_step(&$form_state, 'field_agency_contacts');
-  
-  $u_wrapper = entity_metadata_wrapper('user', $user);
-  
-  // entity_create replaces the procedural steps in the first example of
-  // creating a new object $node and setting its 'type' and uid property
   $node_values = array(
-    'type' => 'case_management_case',
-    'uid' => $user->uid,
-    'status' => 1,
+    'status' => 0,
     'comment' => 0,
     'promote' => 0,
   );
-  $entity = entity_create('node', $node_values);
-  // Now create an entity_metadata_wrapper around the new node entity
-  // to make getting and setting values easier
-  $ewrapper = entity_metadata_wrapper('node', $entity);
-  $cache = dispute_referral_get_page_cache('case_data');
-
-  // Using the wrapper, we do not have to worry about telling Drupal
-  // what language we are using. The Entity API handles that for us.
-  $case_title = $u_wrapper->field_organisation->name->value() . ' - ';
-  $case_title .= $u_wrapper->field_last_name->value() . ' - ';
-  $case_title .= substr(sha1($u_wrapper->field_first_name->value() . time()), 0, 6);
-  $ewrapper->title->set($case_title);
-
-  // Setting the body is a bit different from other properties or fields
-  // because the body can have both its complete value and its summary
-  $ewrapper->body->set(array('value' => $cache->dispute_summary));
-
-  $referred_date = new DateTime();
-  $entity->field_referred_date[LANGUAGE_NONE][0] = array(
-    'value' => date_format($referred_date, 'Y-m-d'),
-    'timezone' => drupal_get_user_timezone(),
-    'timezone_db' => date_default_timezone(),
-  );
-
-  $origin_date = new DateTime($cache->dispute_age);
-  $entity->field_origin_date[LANGUAGE_NONE][0] = array(
-    'value' => date_format($origin_date, 'Y-m-d'),
-    'timezone' => drupal_get_user_timezone(),
-    'timezone_db' => date_default_timezone(),
-  );
-
-  $case_status_term = taxonomy_get_term_by_name('referred', 'case_status');
-  $ewrapper->field_case_status->set(key($case_status_term));
-
-  $vocab = taxonomy_vocabulary_machine_name_load('dispute_factors');
-  $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
-  array_walk($tree, '_cut_down_to_tids');
-  $factor_tids = array();
-  foreach($cache->dispute_factors as $key => $setting) {
-    if (is_string($setting)) {
-  	  $factor_tids[] = $tree[$key - 1];
-    }
-  }
-  $ewrapper->field_factor_summary->set($factor_tids);
-
-  $vocab = taxonomy_vocabulary_machine_name_load('dispute_agencies');
-  $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
-  array_walk($tree, '_cut_down_to_tids');
-  $agency_tids = array();
-  foreach($cache->agencies_involved as $key => $setting) {
-    if (is_string($setting)) {
-  	  $agency_tids[] = $tree[$key - 1];
-    }
-  }
-  $ewrapper->field_agencies_involved->set($agency_tids);
   
-  foreach (current($cache->field_issues) as $key=>$value){
-  	if (is_array($value) && isset($value['value']) && is_string($value['value']) && $value['value'] != '') {
-  	  $ewrapper->field_issues[] = $value['value'];
-	}
-  }
-  
-  $ewrapper->field_party_actions->set($cache->action_parties);
-  $ewrapper->field_agency_actions->set($cache->action_agencies);
-  $ewrapper->field_violence_summary->set($cache->dispute_violence);
-  $ewrapper->field_violence_details->set($cache->dispute_violence_details);
-  $ewrapper->field_asb_summary->set($cache->dispute_asb);
-  $ewrapper->field_asb_details->set($cache->dispute_asb_details);
-  $ewrapper->field_factor_details->set($cache->dispute_factors_details);
-  
-  $parties_list = array();
-  foreach ($cache->field_party as $key => $entity_def) {
-  	$p_entity = entity_create('node', (array)$entity_def['entity']);
-    $p_wrapper = entity_metadata_wrapper('node', $p_entity);
-	$p_wrapper->save();
-	$parties_list[] = array('target_id' => intval($p_wrapper->nid->value()));
-	$ewrapper->field_party->set($parties_list); 
-  }
-  
-  $contacts_list = array();
-  foreach ($cache->field_agency_contacts as $key => $entity_def) {
-  	$c_entity = entity_create('node', (array)$entity_def['entity']);
-    $c_wrapper = entity_metadata_wrapper('node', $c_entity);
-	$c_wrapper->save();
-	$contacts_list[] = array('target_id' => intval($c_wrapper->nid->value()));
-	$ewrapper->field_agency_contacts->set($contacts_list); 
-  }
-  
+  $ewrapper = entity_metadata_wrapper('node', build_case_node($form_state, $node_values));
   $ewrapper->save();
  
   //Delete any attached nodes
@@ -301,22 +201,27 @@ function dispute_referral_subtask_finish(&$form_state) {
 * Main form function for referral outline
 */
 function referral_outline_form($form, &$form_state) {
+  
   global $language;
   $lang_name = $language->language;
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  if (!isset($cache->uncached)) {
-  	$cache->uncached = TRUE;
-  	dispute_referral_set_page_cache('case_data', $cache);
+  if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+    $cache->ajax_call = TRUE;
   }
+  else {
+  	$cache->ajax_call = FALSE;
+  }
+  dispute_referral_set_page_cache('case_data', $cache); 	
   
   // Set up control for dispute summary and get saved value from [referral_object]
   // if it exists and if this is the first display of the form for this step
   $form['dispute_summary'] = array(
     '#type' => 'textarea',
     '#title' => t('Summary of dispute'),
+    '#required' => TRUE,
     '#weight' => '1',
     '#default_value' => _fetch_default_value('dispute_summary', $cache, $form_state, ''),
   );
@@ -352,6 +257,7 @@ function referral_outline_form($form, &$form_state) {
   $field = field_info_field_by_id($instance['field_id']);
   $form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   $form_element['field_issues']['#weight'] = '3';
+  $form_element['field_issues'][$lang_name]['add_more']['#value'] = 'Add another issue';
   $form = array_merge($form, $form_element);
   
   // Set up control for action_parties and get saved value from [referral_object]
@@ -371,8 +277,10 @@ function referral_outline_form($form, &$form_state) {
     '#weight' => '5',
     '#default_value' => _fetch_default_value('action_agencies', $cache, $form_state, ''),
   );
+  $form['#attached']['js'] = array(
+    drupal_get_path('module', 'referral') . '/referral.js',
+  );
   
-  $cache->uncached = TRUE;
   dispute_referral_set_page_cache('case_data', $cache);
   return $form;
 }
@@ -381,6 +289,8 @@ function referral_outline_form($form, &$form_state) {
 * Implements hook_form_FORM_ID_alter
 */
 function referral_form_referral_outline_form_alter (&$form, &$form_state, $form_id) {
+  global $language;
+  $lang_name = $language->language;
   _fix_subform_back_button($form);
 }
 
@@ -413,10 +323,13 @@ function referral_parties_form($form, &$form_state) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  if (!isset($cache->uncached)) {
-  	$cache->uncached = TRUE;
-  	dispute_referral_set_page_cache('case_data', $cache);
+  if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+    $cache->ajax_call = TRUE;
   }
+  else {
+  	$cache->ajax_call = FALSE;
+  }
+  dispute_referral_set_page_cache('case_data', $cache);
   
   $items = NULL;
   $instance = field_info_instance('node', 'field_party', 'case_management_case');
@@ -432,11 +345,20 @@ function referral_parties_form($form, &$form_state) {
   }
   $form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   $form_element['field_party']['#weight'] = '1';
+  // We don't need the publish option on the form 
+  if (isset($form_element['field_party'][$lang_name]['form'])) {
+    unset($form_element['field_party'][$lang_name]['form']['status']);
+	$form_element['field_party'][$lang_name]['form']['#title'] = 'Add new party';
+	$form_element['field_party'][$lang_name]['form']['actions']['ief_add_save']['#value'] = 'Create party';
+	$form_element['field_party'][$lang_name]['form']['field_residents']['und']['#empty_option'] = '- Select a value -';
+  }
+  $form_element['field_party'][$lang_name]['actions']['ief_add']['#value'] = 'Add a party';
   $form = array_merge($form, $form_element);
+  $form['#attached']['js'] = array(
+    drupal_get_path('module', 'referral') . '/referral.js',
+  );
   
-  $cache->uncached = TRUE;
   dispute_referral_set_page_cache('case_data', $cache);
-  
   return $form;
 }
 
@@ -444,6 +366,8 @@ function referral_parties_form($form, &$form_state) {
 * Implements hook_form_FORM_ID_alter 
 */
 function referral_form_referral_parties_form_alter (&$form, &$form_state, $form_id) {
+  global $language;
+  $lang_name = $language->language;
   _fix_subform_back_button($form);
  
   // Use #states to make visibility of 'language' box depend on 'interpreter' box being checked
@@ -453,10 +377,6 @@ function referral_form_referral_parties_form_alter (&$form, &$form_state, $form_
 	    "input[id='edit-field-party-en-form-field-interpreter-und']" => array('checked' => TRUE),
 	  ),
     );
-  }
-  // We don't need the publish option on the form 
-  if (isset($form['field_party']['en']['form']['status']['#type'])) {
-    unset($form['field_party']['en']['form']['status']);
   }
 }
 
@@ -475,14 +395,6 @@ function referral_parties_form_submit($form, &$form_state) {
 }
 
 /**
-* Helper function for array_udiff in submit handler
-* @params: $a1, $a2 arrays of form array('target_id' => n) to be compared
-*/
-function compare_keys($a1, $a2) {
-  return ($a1['target_id'] - $a2['target_id']);
-}
-
-/**
 * Functions for the Features sub-form
 */
 
@@ -496,14 +408,18 @@ function referral_features_form($form, &$form_state) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  if (!isset($cache->uncached)) {
-  	$cache->uncached = TRUE;
-  	dispute_referral_set_page_cache('case_data', $cache);
+  if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+    $cache->ajax_call = TRUE;
   }
+  else {
+  	$cache->ajax_call = FALSE;
+  }
+  dispute_referral_set_page_cache('case_data', $cache);
   
   $form['dispute_violence'] = array(
     '#type' => 'select',
     '#title' => t('Violence?'),
+    '#required' => TRUE,
     '#weight' => '1',
     '#empty_option' => '- select -',
     '#options' => array(
@@ -530,6 +446,7 @@ function referral_features_form($form, &$form_state) {
   $form['dispute_asb'] = array(
     '#type' => 'select',
     '#title' => t('Anti-social behaviour?'),
+    '#required' => TRUE,
     '#weight' => '3',
     '#empty_option' => '- select -',
     '#options' => array(
@@ -583,7 +500,6 @@ function referral_features_form($form, &$form_state) {
     '#default_value' => _fetch_default_value('dispute_factors_details', $cache, $form_state, ''),
   );
   
-  $cache->uncached = TRUE;
   dispute_referral_set_page_cache('case_data', $cache);
   
   return $form;
@@ -608,11 +524,10 @@ function referral_agencies_form($form, &$form_state) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  if (!isset($cache->uncached)) {
-  	$cache->uncached = TRUE;
-  	dispute_referral_set_page_cache('case_data', $cache);
-  }
-  
+  dispute_referral_set_page_cache('case_data', $cache);
+  $form['#attached']['js'] = array(
+    drupal_get_path('module', 'referral') . '/referral.js',
+  );
   $vocab = taxonomy_vocabulary_machine_name_load('dispute_agencies');
   $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
   array_walk($tree, '_cut_down_to_names');
@@ -653,34 +568,135 @@ function referral_agencies_form($form, &$form_state) {
   }
   $sub_key = key($form_state['inline_entity_form']);
   if ($contacts = _fetch_default_value('field_agency_contacts', $cache, $form_state)) {
-  	$form_state['inline_entity_form'][$sub_key]['entities'] = $contacts;
-  }
-  if ($contacts = _fetch_default_value('field_agency_contacts', $cache, $form_state)) {
 	if (in_array('entity', current($contacts))){
       $form_state['inline_entity_form'][$sub_key]['entities'] = $contacts;
 	}
   }
   $form_element = field_default_form('node', NULL, $field, $instance, $lang_name, $items, $form, $form_state);
   $form_element['field_agency_contacts']['#weight'] = '4';
+  if (isset($form_element['field_agency_contacts'][$lang_name]['form'])) {
+    unset($form_element['field_agency_contacts'][$lang_name]['form']['status']);
+	$form_element['field_agency_contacts'][$lang_name]['form']['#title'] = 'Add a contact';
+	$form_element['field_agency_contacts'][$lang_name]['form']['actions']['ief_add_save']['#value'] = 'Create contact';
+  }
+  if (isset($form_element['field_agency_contacts'][$lang_name]['actions']['ief_add'])) {
+    $form_element['field_agency_contacts'][$lang_name]['actions']['ief_add']['#value'] = 'Add a contact';
+  }
   $form = array_merge($form, $form_element);
   dispute_referral_set_page_cache('case_data', $cache);
   
-  $cache->uncached = TRUE;
-  dispute_referral_set_page_cache('case_data', $cache);
+  $path = 'referral/dispute/outline';
   
-  return $form;
+  if( !isset( $form_state['triggering_element']['#ajax'] ) && isset($cache->confirm_routed)) {
+    // The form shown during the confirmation step:
+    $node_values = array(
+      'status' => 0,
+      'comment' => 0,
+      'promote' => 0,
+    );
+	$node = build_case_node($form_state, $node_values);
+	$render_array = build_case_render_array($node);
+    $form['case_info'] = array(
+      '#markup' => drupal_render($render_array),
+    );
+    $path = 'referral/dispute/outline';
+	$description = '<p>You can confirm it below or cancel to go back and edit/add to it.</p>';
+	$description .= '<p>To preserve confidentiality for the parties, you will not be able to';
+	$description .= 'access this referral once you have confirmed it.';
+	$description .= 'However, you can opt to see a print-friendly version and/or download a pdf file for your records.</p>';
+	return confirm_form($form, 
+	  $question=t('Is this information correct?'), 
+	  $path,
+	  $description, 
+	  $yes = 'Confirm'
+	);
+  }
+  else {
+  	if( !isset( $form_state['triggering_element']['#ajax'] )) {
+  	  $cache->confirm_routed = TRUE;
+	  dispute_referral_set_page_cache('case_data', $cache);
+	}
+  	return $form;
+  }
 }
 
 function referral_form_referral_agencies_form_alter (&$form, &$form_state, $form_id) {
+  global $language;
+  $lang_name = $language->language;
   _fix_subform_back_button($form);
+  $cache = dispute_referral_get_page_cache('case_data');
+  if (!isset($form_state['triggering_element']['#ajax'])){
+    if (isset($cache->confirm_routed) && $cache->confirm_routed) {
+  	  $form_state['pre_rebuild'] = TRUE;
+	  if (isset($form['buttons']['return']['#wizard type'])) {
+	    $form['buttons']['return']['#wizard type'] = 'return';
+	  }
+    }
+    else {
+  	  $form_state['pre_rebuild'] = FALSE;
+	  if (isset($form['actions']['submit'])) {
+	    $form['actions']['submit']['#wizard type'] = 'finish';
+		unset($form['ctools_trail']);
+	    unset($form['buttons']);
+	    unset($form['agencies_involved']);
+	    unset($form['other_agency_name']);
+	    unset($form['agency_contact_intro']);
+	    unset($form['field_agency_contacts']);
+	  }
+	  if (isset($form['buttons']['return']['#wizard type'])) {
+	    $form['buttons']['return']['#wizard type'] = 'return';
+	  }
+  	}
+  }
+  $cache->confirm_routed = FALSE;
+  dispute_referral_set_page_cache('case_data', $cache);
 }
 
 function referral_agencies_form_validate (&$form, &$form_state) {
-  
+
 }
 
 function referral_agencies_form_submit (&$form, &$form_state) {
-  
+  $form_state['rebuild'] = $form_state['pre_rebuild'];
+}
+
+/**
+* Implements drupal_alter inline_entity_form_table_fields
+* @fields: arrays of entity table column settings
+* @context: information to use in deciding the appropriate column e.g. field_name
+*  
+*/
+function referral_inline_entity_form_table_fields_alter(&$fields, $context) {
+  switch ($context['field_name']) {
+    case 'field_party':
+      $fields = array(
+        'field_party_reference' => array(
+	      'type' => 'field',
+          'label' => '',
+	      'weight' => 5,
+        ),
+        'title' => array(
+          'type' => 'property',
+          'label' => 'Name',
+          'weight' => 10,
+        ),
+      );
+	  break;
+    case 'field_agency_contacts':
+      $fields = array(
+        'field_name' => array(
+	      'type' => 'field',
+          'label' => 'Name',
+	      'weight' => 5,
+        ),
+        'title' => array(
+          'type' => 'property',
+          'label' => 'Organisation',
+          'weight' => 10,
+        ),
+      );
+	break;
+  }
 }
 
 function _remove_blanks($item) {
@@ -708,8 +724,9 @@ function _unset_to_zeros(&$value, $key) {
 }
 
 function _fetch_default_value ($field_name, $cache, $form_state, $null_value = null) {
-  if (!$cache->uncached && isset($form_state['referral_object']) && property_exists($form_state['referral_object'], $field_name)) {
-	return $form_state['referral_object']->$field_name;
+  $cache = dispute_referral_get_page_cache('case_data');
+  if (!isset($form_state['triggering_element']['#ajax']) && property_exists($cache, $field_name)) {
+	return $cache->$field_name;
   }
   else {
   	return $null_value;
@@ -722,6 +739,10 @@ function cache_step($form_state, $entity_key = null){
   unset($field_values['form_token']);
   unset($field_values['form_id']);
   unset($field_values['op']);
+  unset($field_values['next']);
+  unset($field_values['previous']);
+  unset($field_values['cancel']);
+  unset($field_values['finish']);
   // Store submitted data in a ctools cache object, namespaced 'case_data'.
   $cache = dispute_referral_get_page_cache('case_data');
   foreach ($field_values as $key => $value) {
@@ -733,7 +754,171 @@ function cache_step($form_state, $entity_key = null){
       $cache->$entity_key = $form_state['inline_entity_form'][$subform_key]['entities'];
 	}
   }
-  $cache->uncached = FALSE;
   dispute_referral_set_page_cache('case_data', $cache);
 }
+
+function build_case_node(&$form_state, $options) {
+  global $user;
+  
+  // Agencies, the last step, is most likely not in cache as this is done
+  // after a move to another step.  So we do the save here.
+  cache_step($form_state, 'field_agency_contacts');
+  
+  $u_wrapper = entity_metadata_wrapper('user', $user);
+  
+  // entity_create replaces the procedural steps in the first example of
+  // creating a new object $node and setting its 'type' and uid property
+  $node_values = array(
+    'type' => 'case_management_case',
+    'uid' => $user->uid,
+  );
+  $node_values = array_merge($node_values, $options);
+  $entity = entity_create('node', $node_values);
+  // Now create an entity_metadata_wrapper around the new node entity
+  // to make getting and setting values easier
+  $ewrapper = entity_metadata_wrapper('node', $entity);
+  $cache = dispute_referral_get_page_cache('case_data');
+
+  // Using the wrapper, we do not have to worry about telling Drupal
+  // what language we are using. The Entity API handles that for us.
+  $case_title = $u_wrapper->field_organisation->name->value() . ' - ';
+  $case_title .= $u_wrapper->field_last_name->value() . ' - ';
+  $case_title .= substr(sha1($u_wrapper->field_first_name->value() . time()), 0, 6);
+  $ewrapper->title->set($case_title);
+
+  // Setting the body is a bit different from other properties or fields
+  // because the body can have both its complete value and its summary
+  $ewrapper->body->set(
+    array(
+      'value' => $cache->dispute_summary,
+	  'format' => NULL,
+    )
+  );
+
+  $referred_date = new DateTime();
+  $entity->field_referred_date[LANGUAGE_NONE][0] = array(
+    'value' => date_format($referred_date, 'Y-m-d'),
+    'timezone' => drupal_get_user_timezone(),
+    'timezone_db' => date_default_timezone(),
+  );
+  
+  if (isset($cache->dispute_age)) {
+    $origin_date = new DateTime($cache->dispute_age);
+    $entity->field_origin_date[LANGUAGE_NONE][0] = array(
+      'value' => date_format($origin_date, 'Y-m-d'),
+      'timezone' => drupal_get_user_timezone(),
+      'timezone_db' => date_default_timezone(),
+    );
+  }
+
+  $case_status_term = taxonomy_get_term_by_name('referred', 'case_status');
+  $ewrapper->field_case_status->set(key($case_status_term));
+  
+  if (isset($cache->dispute_factors)) {
+    $vocab = taxonomy_vocabulary_machine_name_load('dispute_factors');
+    $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
+    array_walk($tree, '_cut_down_to_tids');
+    $factor_tids = array();
+    foreach($cache->dispute_factors as $key => $setting) {
+      if (is_string($setting)) {
+  	    $factor_tids[] = $tree[$key - 1];
+      }
+    }
+	$ewrapper->field_factor_summary->set($factor_tids);
+  }
+ 
+  if (isset($cache->agencies_involved)) {
+    $vocab = taxonomy_vocabulary_machine_name_load('dispute_agencies');
+    $tree = taxonomy_get_tree($vocab->vid, 0, 1, FALSE);
+    array_walk($tree, '_cut_down_to_tids');
+    $agency_tids = array();
+    foreach($cache->agencies_involved as $key => $setting) {
+      if (is_string($setting)) {
+  	    $agency_tids[] = $tree[$key - 1];
+      }
+    }
+	$ewrapper->field_agencies_involved->set($agency_tids);
+  }
+  
+  If (isset($cache->field_issues)) {
+    foreach (current($cache->field_issues) as $key=>$value){
+  	  if (is_array($value) && isset($value['value']) && is_string($value['value']) && $value['value'] != '') {
+  	    $ewrapper->field_issues[] = $value['value'];
+	  }
+    }
+  }
+  
+  if (isset($cache->action_parties)){
+  	$ewrapper->field_party_actions->set($cache->action_parties);
+  }
+  if (isset($cache->action_agencies)){
+    $ewrapper->field_agency_actions->set($cache->action_agencies);
+  }
+  $ewrapper->field_violence_summary->set($cache->dispute_violence);
+  if (isset($cache->dispute_violence_details)){
+    $ewrapper->field_violence_details->set($cache->dispute_violence_details);
+  }
+  $ewrapper->field_asb_summary->set($cache->dispute_asb);
+  if (isset($cache->dispute_asb_details)){
+    $ewrapper->field_asb_details->set($cache->dispute_asb_details);
+  }
+  if (isset($cache->dispute_factors_details)){
+    $ewrapper->field_factor_details->set($cache->dispute_factors_details);
+  }
+  
+  $parties_list = array();
+  $node_values['type'] = 'dispute_party';
+  foreach ($cache->field_party as $key => $entity_def) {
+  	$p_entity = entity_create('node', array_merge((array)$entity_def['entity'], $node_values));
+    $p_wrapper = entity_metadata_wrapper('node', $p_entity);
+	$p_wrapper->save();
+	$parties_list[] = array('target_id' => intval($p_wrapper->nid->value()));
+	$ewrapper->field_party->set($parties_list); 
+  }
+  
+  $contacts_list = array();
+  $node_values['type'] = 'agency_contact';
+  foreach ($cache->field_agency_contacts as $key => $entity_def) {
+  	$c_entity = entity_create('node', array_merge((array)$entity_def['entity'], $node_values));
+    $c_wrapper = entity_metadata_wrapper('node', $c_entity);
+	$c_wrapper->save();
+	$contacts_list[] = array('target_id' => intval($c_wrapper->nid->value()));
+	$ewrapper->field_agency_contacts->set($contacts_list); 
+  }
+  return $entity;
+}
+
+function build_case_render_array($entity) {
+  global $language;
+  $lang_name = $language->language;
+  $render_array = array();
+  $render_array['body'] = field_view_field('node', $entity, 'body', 'full', $lang_name);
+  if (isset($entity->field_origin_date)) {
+  	$render_array['field_origin_date'] = field_view_field('node', $entity, 'field_origin_date', 'full', $lang_name);
+  }
+  if (isset($entity->field_factor_summary)) {
+  	$render_array['field_factor_summary'] = field_view_field('node', $entity, 'field_factor_summary', 'full', $lang_name);
+  }
+  /*if (isset($entity->field_agencies_involved)) {
+  	$render_array['field_agencies_involved'] = field_view_field('node', $entity, 'field_agencies_involved', 'full', $lang_name);
+  }*/
+  if (isset($entity->field_issues)) {
+  	$render_array['field_issues'] = field_view_field('node', $entity, 'field_issues', 'full', $lang_name);
+  }
+  if (isset($entity->field_party_actions)) {
+  	$render_array['field_party_actions'] = field_view_field('node', $entity, 'field_party_actions', 'full', $lang_name);
+  }
+  if (isset($entity->field_agency_actions)) {
+  	$render_array['field_agency_actions'] = field_view_field('node', $entity, 'field_agency_actions', 'full', $lang_name);
+  }
+  if (isset($entity->field_agency_contacts)) {
+  	$render_array['field_agency_contacts'] = field_view_field('node', $entity, 'field_agency_contacts', 'full', $lang_name);
+  }
+  $render_array['field_violence_summary'] = field_view_field('node', $entity, 'field_violence_summary', 'full', $lang_name);
+  $render_array['field_asb_summary'] = field_view_field('node', $entity, 'field_asb_summary', 'full', $lang_name);
+
+  return $render_array;
+}
+
+
 
