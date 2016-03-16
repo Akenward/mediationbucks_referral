@@ -621,19 +621,17 @@ function referral_agencies_form($form, &$form_state) {
 }
 
 function referral_form_referral_agencies_form_alter (&$form, &$form_state, $form_id) {
-  global $language;
-  $lang_name = $language->language;
   _fix_subform_back_button($form);
   $cache = dispute_referral_get_page_cache('case_data');
   if (!isset($form_state['triggering_element']['#ajax'])){
     if (isset($cache->confirm_routed) && $cache->confirm_routed) {
-  	  $form_state['pre_rebuild'] = TRUE;
+  	  $form_state['plan_rebuild'] = TRUE;
 	  if (isset($form['buttons']['return']['#wizard type'])) {
 	    $form['buttons']['return']['#wizard type'] = 'return';
 	  }
     }
     else {
-  	  $form_state['pre_rebuild'] = FALSE;
+  	  $form_state['plan_rebuild'] = FALSE;
 	  if (isset($form['actions']['submit'])) {
 	    $form['actions']['submit']['#wizard type'] = 'finish';
 		unset($form['ctools_trail']);
@@ -657,7 +655,7 @@ function referral_agencies_form_validate (&$form, &$form_state) {
 }
 
 function referral_agencies_form_submit (&$form, &$form_state) {
-  $form_state['rebuild'] = $form_state['pre_rebuild'];
+  $form_state['rebuild'] = $form_state['plan_rebuild'];
 }
 
 /**
@@ -734,27 +732,29 @@ function _fetch_default_value ($field_name, $cache, $form_state, $null_value = n
 }
 
 function cache_step($form_state, $entity_key = null){
-  $field_values = $form_state['values'];
-  unset($field_values['form_build_id']);
-  unset($field_values['form_token']);
-  unset($field_values['form_id']);
-  unset($field_values['op']);
-  unset($field_values['next']);
-  unset($field_values['previous']);
-  unset($field_values['cancel']);
-  unset($field_values['finish']);
-  // Store submitted data in a ctools cache object, namespaced 'case_data'.
-  $cache = dispute_referral_get_page_cache('case_data');
-  foreach ($field_values as $key => $value) {
-    $cache->$key = $value;
+  if (isset($form_state['values'])) { 
+    $field_values = $form_state['values'];
+    unset($field_values['form_build_id']);
+    unset($field_values['form_token']);
+    unset($field_values['form_id']);
+    unset($field_values['op']);
+    unset($field_values['next']);
+    unset($field_values['previous']);
+    unset($field_values['cancel']);
+    unset($field_values['finish']);
+    // Store submitted data in a ctools cache object, namespaced 'case_data'.
+    $cache = dispute_referral_get_page_cache('case_data');
+    foreach ($field_values as $key => $value) {
+      $cache->$key = $value;
+    }
+    if ($entity_key) {
+      $subform_key = key($form_state['inline_entity_form']);
+	  if (isset($form_state['inline_entity_form'][$subform_key]['entities'])) {
+        $cache->$entity_key = $form_state['inline_entity_form'][$subform_key]['entities'];
+	  }
+    }
+    dispute_referral_set_page_cache('case_data', $cache);
   }
-  if ($entity_key) {
-    $subform_key = key($form_state['inline_entity_form']);
-	if (isset($form_state['inline_entity_form'][$subform_key]['entities'])) {
-      $cache->$entity_key = $form_state['inline_entity_form'][$subform_key]['entities'];
-	}
-  }
-  dispute_referral_set_page_cache('case_data', $cache);
 }
 
 function build_case_node(&$form_state, $options) {
@@ -788,12 +788,10 @@ function build_case_node(&$form_state, $options) {
 
   // Setting the body is a bit different from other properties or fields
   // because the body can have both its complete value and its summary
-  $ewrapper->body->set(
-    array(
-      'value' => $cache->dispute_summary,
-	  'format' => NULL,
-    )
-  );
+  $body = array();
+  $body['format'] = NULL;
+  $body['value'] = (isset($cache->dispute_summary)) ? $cache->dispute_summary : '';
+  $ewrapper->body->set($body);
 
   $referred_date = new DateTime();
   $entity->field_referred_date[LANGUAGE_NONE][0] = array(
@@ -868,30 +866,36 @@ function build_case_node(&$form_state, $options) {
   
   $parties_list = array();
   $node_values['type'] = 'dispute_party';
-  foreach ($cache->field_party as $key => $entity_def) {
-  	$p_entity = entity_create('node', array_merge((array)$entity_def['entity'], $node_values));
-    $p_wrapper = entity_metadata_wrapper('node', $p_entity);
-	$p_wrapper->save();
-	$parties_list[] = array('target_id' => intval($p_wrapper->nid->value()));
-	$ewrapper->field_party->set($parties_list); 
+  if (isset($cache->field_party)) {
+    foreach ($cache->field_party as $key => $entity_def) {
+  	  $p_entity = entity_create('node', array_merge((array)$entity_def['entity'], $node_values));
+      $p_wrapper = entity_metadata_wrapper('node', $p_entity);
+	  $p_wrapper->save();
+	  $parties_list[] = array('target_id' => intval($p_wrapper->nid->value()));
+	  $ewrapper->field_party->set($parties_list);
+	}
   }
   
   $contacts_list = array();
   $node_values['type'] = 'agency_contact';
-  foreach ($cache->field_agency_contacts as $key => $entity_def) {
-  	$c_entity = entity_create('node', array_merge((array)$entity_def['entity'], $node_values));
-    $c_wrapper = entity_metadata_wrapper('node', $c_entity);
-	$c_wrapper->save();
-	$contacts_list[] = array('target_id' => intval($c_wrapper->nid->value()));
-	$ewrapper->field_agency_contacts->set($contacts_list); 
+  if (isset($cache->field_agency_contacts)) {
+    foreach ($cache->field_agency_contacts as $key => $entity_def) {
+  	  $c_entity = entity_create('node', array_merge((array)$entity_def['entity'], $node_values));
+      $c_wrapper = entity_metadata_wrapper('node', $c_entity);
+	  $c_wrapper->save();
+	  $contacts_list[] = array('target_id' => intval($c_wrapper->nid->value()));
+	  $ewrapper->field_agency_contacts->set($contacts_list);
+	}
   }
   return $entity;
 }
 
 function build_case_render_array($entity) {
+  
   global $language;
   $lang_name = $language->language;
-  $render_array = array();
+  return node_view($entity, 'full', $lang_name);
+  /*$render_array = array();
   $render_array['body'] = field_view_field('node', $entity, 'body', 'full', $lang_name);
   if (isset($entity->field_origin_date)) {
   	$render_array['field_origin_date'] = field_view_field('node', $entity, 'field_origin_date', 'full', $lang_name);
@@ -899,9 +903,13 @@ function build_case_render_array($entity) {
   if (isset($entity->field_factor_summary)) {
   	$render_array['field_factor_summary'] = field_view_field('node', $entity, 'field_factor_summary', 'full', $lang_name);
   }
-  /*if (isset($entity->field_agencies_involved)) {
-  	$render_array['field_agencies_involved'] = field_view_field('node', $entity, 'field_agencies_involved', 'full', $lang_name);
-  }*/
+  if (isset($entity->field_agencies_involved)) {
+  	//$render_array['field_agencies_involved'] = field_view_field('node', $entity, 'field_agencies_involved', 'full', $lang_name);
+    dpm(field_view_field('node', $entity, 'field_agencies_involved', 'full', $lang_name));
+  }
+  
+  dpm($entity);
+  
   if (isset($entity->field_issues)) {
   	$render_array['field_issues'] = field_view_field('node', $entity, 'field_issues', 'full', $lang_name);
   }
@@ -917,7 +925,7 @@ function build_case_render_array($entity) {
   $render_array['field_violence_summary'] = field_view_field('node', $entity, 'field_violence_summary', 'full', $lang_name);
   $render_array['field_asb_summary'] = field_view_field('node', $entity, 'field_asb_summary', 'full', $lang_name);
 
-  return $render_array;
+  return $render_array;*/
 }
 
 
