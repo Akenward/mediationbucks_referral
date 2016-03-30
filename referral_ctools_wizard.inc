@@ -116,7 +116,12 @@ function dispute_referral_clear_page_cache($name) {
 * Callback executed when the 'next' or 'back' button is clicked.
 */
 function dispute_referral_subtask_next(&$form_state) {
-
+  $cache = dispute_referral_get_page_cache('case_data');
+  // unset flag to prevent extra submit for agencies form (on re-entry from cancel confirm)
+  unset($cache->agencies_submitted);
+  // unset flag to route agency form to confirm stage
+  unset($cache->confirm_routed);
+  dispute_referral_set_page_cache('case_data', $cache);
 }
 
 function dispute_referral_subtask_back(&$form_state) {
@@ -130,7 +135,7 @@ function dispute_referral_subtask_cancel(&$form_state) {
   // Delete the node under development.  Child nodes for parties
   // and agency contacts will be deleted automatically.
   $cache = dispute_referral_get_page_cache('case_data');
-  $node = node_delete($cache->ewrapper->nid->value());
+  $node = node_delete($cache->nid);
 
   // Clear ctools cache object.
   dispute_referral_clear_page_cache('case_data');
@@ -147,19 +152,81 @@ function dispute_referral_subtask_return(&$form_state) {
 */
 function dispute_referral_subtask_finish(&$form_state) {
   
-  // Do updates from agencies form
-  // ===> save agencies data and agency contact nodes
-  // if we don't go through the agency commit handler
-
+  global $language;
+  global $user;
+  $u_wrapper = entity_metadata_wrapper('user', $user);
+  
   $cache = dispute_referral_get_page_cache('case_data');
+  $node = node_load($cache->nid);
+  
+  // Set today as the value for referral date 
+  $referred_date = new DateTime();
+  $node->field_referred_date[LANGUAGE_NONE][0] = array(
+    'value' => date_format($referred_date, 'Y-m-d'),
+    'timezone' => drupal_get_user_timezone(),
+    'timezone_db' => date_default_timezone(),
+  );
+	
+  // Set the status of the case as "referred" and the node as "unpublished"
+  $case_status_term = taxonomy_get_term_by_name('referred', 'case_status');
+  $cache->ewrapper->field_case_status->set(key($case_status_term));
   $cache->ewrapper->status->set(0);
+  
+  // create a title by combining referrer's last name and the first
+  // four characters of a hash value to give a practically unique reference
+  $case_title = $u_wrapper->field_last_name->value() . '/';
+  $case_title .= substr(sha1($u_wrapper->field_first_name->value() . time()), 0, 6);
+  $cache->ewrapper->title->set($case_title);
+  
+  
+  // save a snapshot of the organisation tree for the referrer - this may changes
+  // during the life of the case
+  $organisation = $u_wrapper->field_organisation->value();
+  if (is_object($organisation)) {
+    $org_parents = taxonomy_get_parents_all($organisation->tid);
+    for ($i = count($org_parents) - 2; $i >= 0; $i--) {
+  	  $cache->ewrapper->field_referring_organisation[] = $org_parents[$i] -> name;
+    }
+  }
   $cache->ewrapper->save();
+  $nid = $node->nid;
+  $options = array(
+    'query' => array (
+      'nid' => $nid,
+    ),
+  );
+  $node_path = url($GLOBALS['base_url'] . '/content/referral-complete', $options);
+  drupal_mail(
+    'referral', 
+    'referral_alert',
+    'mediation@mediationbucks.org.uk',
+	//'andy@kenruff.co.uk',
+    $language,
+    array(
+	  'referral_nid' => $nid,
+	),
+	'web@mediationbucks.org.uk',
+	TRUE
+  );
+ 
   //Clear Ctool cache object.
   dispute_referral_clear_page_cache('case_data');
 
   // Redirect the user to the confirmation page.
-  drupal_goto('content/referral-complete');
+  drupal_goto($node_path);
   }
+/**
+* Implements hook_inline_entity_form_entity_form_alter
+* inserts extra validation callbacks for the party and agency contact forms
+*/
+function referral_inline_entity_form_entity_form_alter(&$entity_form, &$form_state) {
+  if ($entity_form['#entity']->type == 'dispute_party') {
+    $entity_form['#element_validate'][] = 'referral_party_ief_validate';
+  }
+  if ($entity_form['#entity']->type == 'agency_contact') {
+    $entity_form['#element_validate'][] = 'referral_contact_ief_validate';
+  }
+}
 
 /**
 * Functions for the Outline sub-form
@@ -171,16 +238,12 @@ function dispute_referral_subtask_finish(&$form_state) {
 function referral_outline_form($form, &$form_state) {
   // create the initial case referral node that we will build on
   referral_create_referral();
-
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  // unset flag to prevent extra submit for agencies form (on re-entry from cancel confirm)
-  unset($cache->agencies_submitted);
-  
-  $node = node_load($cache->ewrapper->nid->value());
-  
+  $node = node_load($cache->nid);
+    
   // Set up control for dispute summary with any existing data
   $form['dispute_summary'] = array(
     '#type' => 'textarea',
@@ -195,6 +258,7 @@ function referral_outline_form($form, &$form_state) {
   $instance = field_info_instance('node', 'field_origin_date', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
   $form_element = field_default_form('node', $node, $field, $instance, 'und', $items, $form, $form_state);
+  $form_element['field_origin_date']['und'][0]['#description'] = t('When, approximately, did relations start to deteriorate?');
   $form_element['field_origin_date']['#weight'] = '2';
   $form = array_merge($form, $form_element);
   
@@ -203,6 +267,7 @@ function referral_outline_form($form, &$form_state) {
   $instance = field_info_instance('node', 'field_issues', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
   $form_element = field_default_form('node', $node, $field, $instance, 'und', $items, $form, $form_state);
+  $form_element['field_issues']['#description'] = t('When, approximately, did relations start to deteriorate?');
   $form_element['field_issues']['#weight'] = '3';
   $form = array_merge($form, $form_element);
   $other_key = array_search('Other', $form_element['field_issues']['und']['#options']);
@@ -244,6 +309,9 @@ function referral_outline_form($form, &$form_state) {
 */
 function referral_form_referral_outline_form_alter (&$form, &$form_state, $form_id) {
   _fix_subform_back_button($form);
+  $form['dispute_summary']['#rows'] = 3;
+  $form['action_parties']['#rows'] = 3;
+  $form['action_agencies']['#rows'] = 3;
 }
 
 /**
@@ -258,7 +326,7 @@ function referral_outline_form_validate ($form, &$form_state) {
 */
 function referral_outline_form_submit ($form, &$form_state) {
   $cache = dispute_referral_get_page_cache('case_data');
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   
   // Update value for dispute summary
   $body = array();
@@ -309,57 +377,64 @@ function referral_parties_form($form, &$form_state) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   $items = _fetch_default_value('field_party', $cache, array());
   $instance = field_info_instance('node', 'field_party', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
   $form_element = field_default_form('node', $node, $field, $instance, 'und', $items, $form, $form_state);
   $form_element['field_party']['#weight'] = '1';
-  // We don't need the publish option on the form 
-  if (isset($form_element['field_party']['und']['form'])) {
-    unset($form_element['field_party']['und']['form']['status']);
-	$form_element['field_party']['und']['form']['#title'] = 'Add new party';
-	$form_element['field_party']['und']['form']['actions']['ief_add_save']['#value'] = 'Create party';
-	$form_element['field_party']['und']['form']['field_residents']['und']['#empty_option'] = '- Select a value -';
+  // Change presentation of widget sub_form to create new party
+  _party_form_tidy($form_element['field_party']['und'], (int)0, TRUE);
+  // Change presentation of widget sub-form to edit existing party 
+  array_walk($form_element['field_party']['und']['entities'], '_party_form_tidy', FALSE);
+  // Change the wording on widget 'add a node' button
+  $subform_flag = (isset($form_element['field_party']['und']['#subform_flag']));
+  foreach($form_element['field_party']['und']['entities'] as $key => $value) {
+  	if (isset($value['#subform_flag'])) {
+  	  $subform_flag = TRUE;
+  	}
   }
-  if (isset($form['field_party']['und']['entities']['0']['form']['status'])) {
-  	unset($form['field_party']['und']['entities']['0']['form']['status']);
-  }
+  $subform = array(
+	'subformFlag' => $subform_flag,
+  );
+  
+  drupal_add_js(array('referral' => $subform), 'setting');
   $form_element['field_party']['und']['actions']['ief_add']['#value'] = 'Add a party';
+  
   $form = array_merge($form, $form_element);
   $form['#attached']['js'] = array(
     drupal_get_path('module', 'referral') . '/referral.js',
   );
- 
   return $form;
+}
+
+function _party_form_tidy(&$section, $key, $new) {
+  if (is_int($key)) {
+  	if (isset($section['form'])) {
+  	  unset($section['form']['status']);
+	  $section['form']['#title'] = 'Add new party';
+	  $section['form']['actions']['ief_add_save']['#value'] = 'Create party';
+	  $section['form']['field_residents']['und']['#empty_option'] = '- Select a value -';
+	  $section['form']['actions']['ief_edit_save']['#value'] = 'Update party';
+	  $insert = ($new) ? '' : 'entities-' . $key . '-';
+	  $section['form']['field_language']['und']['0']['value']['#states'] = array(
+  	    'visible' => array(
+	      "input[id='edit-field-party-und-" . $insert . "form-field-interpreter-und']" => array('checked' => TRUE),
+	    ),
+      );
+	  $section['#subform_flag'] = TRUE;
+    }
+	else {
+	  unset($section['#subform_flag']);
+	}
+  }
 }
 
 /**
 * Implements hook_form_FORM_ID_alter for "parties" form
 */
 function referral_form_referral_parties_form_alter (&$form, &$form_state, $form_id) {
-  _fix_subform_back_button($form);
- 
-  // Use #states to make visibility of 'language' box depend on 'interpreter' box being checked
-  if (isset($form['field_party']['und']['form']['field_language']['und']['0']['value']['#type'])) {
-    $form['field_party']['und']['form']['field_language']['und']['0']['value']['#states'] = array(
-      'visible' => array(
-	    "input[id='edit-field-party-und-form-field-interpreter-und']" => array('checked' => TRUE),
-	  ),
-    );
-  }
-  // Do the same in the edit party form
-  if (isset($form['field_party']['und']['entities']['0']['form']['field_language']['und']['0']['value']['#type'])) {
-  	$form['field_party']['und']['entities']['0']['form']['field_language']['und']['0']['value']['#states'] = array(
-      'visible' => array(
-	    "input[id='edit-field-party-und-entities-0-form-field-interpreter-und']" => array('checked' => TRUE),
-	  ),
-    );
-  }
-  // Switch off the control for published/unpublished status
-  if (isset($form['field_party']['und']['entities']['0']['form']['status'])) {
-  	unset($form['field_party']['und']['entities']['0']['form']['status']);
-  }
+   _fix_subform_back_button($form);
 }
 
 /**
@@ -367,6 +442,110 @@ function referral_form_referral_parties_form_alter (&$form, &$form_state, $form_
 */
 function referral_parties_form_validate($form, &$form_state) {
   
+}
+
+/**
+* Validation callback for the "party" form opened in the ief widget
+*/
+function referral_party_ief_validate($form, &$form_state){
+  	
+  //check postcode has valid format
+  $regex = '/^(GIR ?0AA|[A-PR-UWYZ]([0-9]{1,2}|([A-HK-Y][0-9]([0-9ABEHMNPRV-Y])?)|[0-9][A-HJKPS-UW]) ?[0-9][ABD-HJLNP-UW-Z]{2})$/';
+  if ($form['#op'] == 'add') {
+  	$value = $form_state['values']['field_party']['und']['form']['field_postcode']['und'][0]['value'];
+	$insert = '';
+  }
+  else {
+  	foreach ($form_state['values']['field_party']['und']['entities'] as $key => $sub_form){
+  	  if (isset($form_state['values']['field_party']['und']['entities'][$key]['form'])) {
+  	  	$value = $form_state['values']['field_party']['und']['entities'][$key]['form']['field_postcode']['und'][0]['value'];
+		$insert = "[entities][" . $key ."]";
+		break;
+  	  }
+  	}
+  }
+  if ($value != '') {
+    if (!preg_match($regex, $value)) {
+      form_set_error('field_party][und]' . $insert . '[form][field_postcode][und][0][value', t('Not a valid email address'));
+    }
+  }
+  
+  //check phone has valid format
+  $pattern = array (
+  	'/ /',
+  	'/\(/',
+  	'/\)/',
+  	'/\+/',
+  	'/\-/',
+	);
+  $regex = '/^((44)|0)[0-9]{8,10}$/';
+  if ($form['#op'] == 'add') {
+	$value = preg_replace($pattern, '', $form_state['values']['field_party']['und']['form']['field_phone']['und'][0]['value']);
+	$insert = '';
+  }
+  else {
+  	foreach ($form_state['values']['field_party']['und']['entities'] as $key => $sub_form){
+  	  if (isset($form_state['values']['field_party']['und']['entities'][$key]['form'])) {
+  	  	$value = preg_replace($pattern, '', $form_state['values']['field_party']['und']['entities'][$key]['form']['field_phone']['und'][0]['value']);
+		$insert = "[entities][" . $key ."]";
+		break;
+  	  }
+  	}
+  }
+  if ($value != '') {
+    if (!preg_match($regex, $value)) {
+      form_set_error('field_party][und]' . $insert . '[form][field_phone][und][0][value', t('Not a valid UK phone number'));
+    }
+  }
+  
+  //check mobile has valid format
+  $pattern = array (
+  	'/ /',
+  	'/\(/',
+  	'/\)/',
+  	'/\+/',
+  	'/\-/',
+	);
+  $regex = '/^(07[\d]{8,12}|447[\d]{7,11})$/';
+  if ($form['#op'] == 'add') {
+	$value = preg_replace($pattern, '', $form_state['values']['field_party']['und']['form']['field_mobile']['und'][0]['value']);
+	$insert = '';
+  }
+  else {
+  	foreach ($form_state['values']['field_party']['und']['entities'] as $key => $sub_form){
+  	  if (isset($form_state['values']['field_party']['und']['entities'][$key]['form'])) {
+  	  	$value = preg_replace($pattern, '', $form_state['values']['field_party']['und']['entities'][$key]['form']['field_mobile']['und'][0]['value']);
+		$insert = "[entities][" . $key ."]";
+		break;
+  	  }
+  	}
+  }
+  if ($value != '') {
+    if (!preg_match($regex, $value)) {
+      form_set_error('field_party][und]' . $insert . '[form][field_mobile][und][0][value', t('Not a valid UK mobile number'));
+    }
+  }	
+	
+  //check email has valid format
+  $regex = '/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){255,})(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){65,}@)(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F]|(?:\x5C[\x00-\x7F]))*\x22))(?:\.(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F]|(?:\x5C[\x00-\x7F]))*\x22)))*@(?:(?:(?!.*[^.]{64,})(?:(?:(?:xn--)?[a-z0-9]+(?:-[a-z0-9]+)*\.){1,126}){1,}(?:(?:[a-z][a-z0-9]*)|(?:(?:xn--)[a-z0-9]+))(?:-[a-z0-9]+)*)|(?:\[(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){7})|(?:(?!(?:.*[a-f0-9][:\]]){7,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?)))|(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){5}:)|(?:(?!(?:.*[a-f0-9]:){5,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3}:)?)))?(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))(?:\.(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))){3}))\]))$/iD';
+  if ($form['#op'] == 'add') {
+  	$value = $form_state['values']['field_party']['und']['form']['field_email']['und'][0]['value'];
+	$insert = '';
+  }
+  else {
+  	foreach ($form_state['values']['field_party']['und']['entities'] as $key => $sub_form){
+  	  if (isset($form_state['values']['field_party']['und']['entities'][$key]['form'])) {
+  	  	$value = $form_state['values']['field_party']['und']['entities'][$key]['form']['field_email']['und'][0]['value'];
+		$insert = "[entities][" . $key ."]";
+		break;
+  	  }
+  	}
+  }
+  if ($value != '') {
+    if (!preg_match($regex, $value)) {
+      form_set_error('field_party][und]' . $insert . '[form][field_email][und][0][value', t('Not a valid email address'));
+    }
+  }
 }
 
 /**
@@ -378,9 +557,9 @@ function referral_parties_form_submit($form, &$form_state) {
     'deleted' => FALSE,
   );
   $cache = dispute_referral_get_page_cache('case_data');
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   field_attach_submit('node', $node, $form, $form_state, $submit_options);
-  $cache->ewrapper->save();
+  node_save($node);
 }
 
 /**
@@ -396,9 +575,7 @@ function referral_features_form($form, &$form_state) {
     $form['#parents'] = array();
   }
   $cache = dispute_referral_get_page_cache('case_data');
-  // unset flag to prevent extra submit for agencies form (on re-entry from agency via previous button)
-  unset($cache->agencies_submitted);
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   
   // Set up control for dispute violence with three options  
   $form['dispute_violence'] = array(
@@ -489,6 +666,9 @@ function referral_features_form($form, &$form_state) {
 */
 function referral_form_referral_features_form_alter (&$form, &$form_state, $form_id) {
   _fix_subform_back_button($form);
+  $form['dispute_violence_details']['#rows'] = 3;
+  $form['dispute_asb_details']['#rows'] = 3;
+  $form['dispute_factor_details']['#rows'] = 3;
 }
 
 /**
@@ -503,7 +683,7 @@ function referral_features_form_validate (&$form, &$form_state) {
 */
 function referral_features_form_submit (&$form, &$form_state) {
   $cache = dispute_referral_get_page_cache('case_data');
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   
   // Update violence summary
   $cache->ewrapper->field_violence_summary->set($form_state['values']['dispute_violence']);
@@ -535,12 +715,17 @@ function referral_features_form_submit (&$form, &$form_state) {
 * Implements hook_form for "agencies"
 */
 function referral_agencies_form($form, &$form_state) {
-  referral_create_referral();
+  global $user;
+  dpm($form_state['#confirm_flag']);
+  $cache = dispute_referral_get_page_cache('case_data');
+  /*if (isset($cache->agencies_submitted) || !isset($cache->nid)) {
+    $menu_path = $GLOBALS['base_path'] .'/referral/dispute');
+	drupal_goto($menu_path);
+  }*/
   if (!isset($form['#parents'])) {
     $form['#parents'] = array();
   }
-  $cache = dispute_referral_get_page_cache('case_data');
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   
   $form['#attached']['js'] = array(
     drupal_get_path('module', 'referral') . '/referral.js',
@@ -567,7 +752,7 @@ function referral_agencies_form($form, &$form_state) {
   );
   
   $form['agency_contact_intro'] = array(
-    '#markup' => '<p>If you want us to inform other organisations of the outcome of mediation, please provide names and contact details below.</p>',
+    '#markup' => '<div class="agency-contact-info">If you would like us to inform other organisations of the outcome of mediation, please provide names and contact details below.</div>',
     '#weight' => '3',
   );
   
@@ -575,41 +760,49 @@ function referral_agencies_form($form, &$form_state) {
   $instance = field_info_instance('node', 'field_agency_contacts', 'case_management_case');
   $field = field_info_field_by_id($instance['field_id']);
   $form_element = field_default_form('node', $node, $field, $instance, 'und', $items, $form, $form_state);
-  if (isset($form_element['field_agency_contacts']['und']['form'])) {
-    unset($form_element['field_agency_contacts']['und']['form']['status']);
-	$form_element['field_agency_contacts']['und']['form']['#title'] = 'Add new contact';
-	$form_element['field_agency_contacts']['und']['form']['actions']['ief_add_save']['#value'] = 'Create contact';
-	$form_element['field_agency_contacts']['und']['form']['field_residents']['und']['#empty_option'] = '- Select a value -';
+
+  // Change presentation of widget sub_form to create new party
+  _agencies_form_tidy($form_element['field_agency_contacts']['und'], (int)0, TRUE);
+  // Change presentation of widget sub-form to edit existing party 
+  array_walk($form_element['field_agency_contacts']['und']['entities'], '_agencies_form_tidy', FALSE);
+  // Change the wording on widget 'add a node' button
+  $subform_flag = (isset($form_element['field_agency_contacts']['und']['#subform_flag']));
+  foreach($form_element['field_agency_contacts']['und']['entities'] as $key => $value) {
+  	if (isset($value['#subform_flag'])) {
+  	  $subform_flag = TRUE;
+  	}
   }
+  $subform = array(
+	'subformFlag' => $subform_flag,
+  );
+  drupal_add_js(array('referral' => $subform), 'setting');
   $form_element['field_agency_contacts']['und']['actions']['ief_add']['#value'] = 'Add a contact';
   $form = array_merge($form, $form_element);
   $form['#attached']['js'] = array(
     drupal_get_path('module', 'referral') . '/referral.js',
   );
   $cache->ewrapper->save();
-  
-  if( !isset( $form_state['triggering_element']['#ajax'] ) && isset($cache->confirm_routed)) {
+  if( !isset( $form_state['triggering_element']['#ajax'] ) && isset($form_state['#confirm_flag'])) {
     // The form shown during the confirmation step:
-    $node_values = array(
-      'status' => 0,
-      'comment' => 0,
-      'promote' => 0,
-    );
-	$render_array = build_case_render_array($node);
-    $form['case_info'] = array(
-      '#markup' => drupal_render($render_array),
-    );
-    $path = 'referral/dispute/outline';
-	$description = '<p>You can confirm it below or cancel to go back and edit/add to it.</p>';
-	$description .= '<p>To preserve confidentiality for the parties, you will not be able to';
-	$description .= 'access this referral once you have confirmed it.';
-	$description .= 'However, you can opt to see a print-friendly version and/or download a pdf file for your records.</p>';
-	return confirm_form($form, 
-	  $question=t('Is this information correct?'), 
-	  $path,
-	  $description, 
-	  $yes = 'Confirm'
-	);
+	if($node->uid == $user->uid) {
+	  $render_array = build_case_render_array($node);
+	  unset ($render_array['field_case_status']);
+	  unset ($render_array['links']);
+      $form['case_info'] = array(
+        '#markup' => drupal_render($render_array),
+      );
+      $path = 'referral/dispute/outline';
+	  $description = '<p>You can confirm below or go back and amend the information.</p>';
+	  $description .= '<p>To ensure confidentiality for the parties, you will only be able ';
+	  $description .= 'to access this referral online today.  However, you will be able to open a print-friendly screen ';
+	  $description .= 'and/or download a pdf version after confirming to make a copy for your records.</p>';
+	  return confirm_form($form, 
+	    $question=t('Is this information correct?'), 
+	    $path,
+	    $description, 
+	    $yes = 'Confirm'
+	  );
+	}
   }
   else {
   	if( !isset( $form_state['triggering_element']['#ajax'] )) {
@@ -619,6 +812,21 @@ function referral_agencies_form($form, &$form_state) {
   	return $form;
   }
 }
+
+function _agencies_form_tidy(&$section, $key, $new = FALSE) {
+  if (is_int($key)) {
+  	if (isset($section['form'])) {
+  	  unset($section['form']['status']);
+	  $section['form']['#title'] = 'Add new contact';
+	  $section['form']['actions']['ief_add_save']['#value'] = 'Create contact';
+	  $section['form']['actions']['ief_edit_save']['#value'] = 'Update contact';
+      $section['#subform_flag'] = TRUE;
+    }
+	else {
+	  unset($section['#subform_flag']);
+	}
+  }
+}
   
 /**
 * Implements hook_form_FORM_ID_alter for "agencies" form
@@ -626,55 +834,70 @@ function referral_agencies_form($form, &$form_state) {
 function referral_form_referral_agencies_form_alter (&$form, &$form_state, $form_id) {
   _fix_subform_back_button($form);
   
-  // Switch off the control for published/unpublished status
-  if (isset($form['field_agency_contacts']['und']['entities']['0']['form']['status'])) {
-  	unset($form['field_agency_contacts']['und']['entities']['0']['form']['status']);
-  }
   $cache = dispute_referral_get_page_cache('case_data');
-  if (!isset($form_state['triggering_element']['#ajax'])){
-    if (isset($cache->confirm_routed) && $cache->confirm_routed) {
-  	  $form_state['plan_rebuild'] = TRUE;
-	  if (isset($form['buttons']['return']['#wizard type'])) {
-	    $form['buttons']['return']['#wizard type'] = 'return';
-	  }
-    }
-    else {
-  	  $form_state['plan_rebuild'] = FALSE;
-	  if (isset($form['actions']['submit'])) {
-	    $form['actions']['submit']['#wizard type'] = 'finish';
-		unset($form['ctools_trail']);
-	    unset($form['buttons']);
-	    unset($form['field_agencies_involved']);
-	    unset($form['other_agency_name']);
-	    unset($form['agency_contact_intro']);
-	    unset($form['field_agency_contacts']);
-	  }
-	  if (isset($form['buttons']['return']['#wizard type'])) {
-	    $form['buttons']['return']['#wizard type'] = 'return';
-	  }
-  	}
-  $cache->confirm_routed = FALSE;
-  dispute_referral_set_page_cache('case_data', $cache);
+  
+  if (!isset($form_state['triggering_element']['#ajax']) && isset($form_state['#confirm_flag'])) {
+	if (isset($form['actions']['submit'])) {
+	  $form['actions']['submit']['#wizard type'] = 'finish';
+      unset($form['ctools_trail']);
+	  unset($form['buttons']);
+	  unset($form['field_agencies_involved']);
+	  unset($form['other_agency_name']);
+	  unset($form['agency_contact_intro']);
+	  unset($form['field_agency_contacts']);
+	}
   }
+  if (isset($form['actions']['cancel']) && $form['actions']['cancel']['#type'] == 'link') {
+    $form['actions']['cancel']['#title'] = 'Amend';
+  }
+  if (isset($form['buttons']['return']['#wizard type'])) {
+	$form['buttons']['return']['#wizard type'] = 'return';
+  }
+  dispute_referral_set_page_cache('case_data', $cache);
 }
 
 /**
 * Implements hook_form_validate for "agencies" form
 */
 function referral_agencies_form_validate (&$form, &$form_state) {
+  
+}
 
+/**
+* Validation callback for the "agency contact" form opened in the ief widget
+*/
+function referral_contact_ief_validate($form, &$form_state){
+  //check email has valid format
+  $regex = '/^(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){255,})(?!(?:(?:\x22?\x5C[\x00-\x7E]\x22?)|(?:\x22?[^\x5C\x22]\x22?)){65,}@)(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F]|(?:\x5C[\x00-\x7F]))*\x22))(?:\.(?:(?:[\x21\x23-\x27\x2A\x2B\x2D\x2F-\x39\x3D\x3F\x5E-\x7E]+)|(?:\x22(?:[\x01-\x08\x0B\x0C\x0E-\x1F\x21\x23-\x5B\x5D-\x7F]|(?:\x5C[\x00-\x7F]))*\x22)))*@(?:(?:(?!.*[^.]{64,})(?:(?:(?:xn--)?[a-z0-9]+(?:-[a-z0-9]+)*\.){1,126}){1,}(?:(?:[a-z][a-z0-9]*)|(?:(?:xn--)[a-z0-9]+))(?:-[a-z0-9]+)*)|(?:\[(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){7})|(?:(?!(?:.*[a-f0-9][:\]]){7,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,5})?)))|(?:(?:IPv6:(?:(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){5}:)|(?:(?!(?:.*[a-f0-9]:){5,})(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3})?::(?:[a-f0-9]{1,4}(?::[a-f0-9]{1,4}){0,3}:)?)))?(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))(?:\.(?:(?:25[0-5])|(?:2[0-4][0-9])|(?:1[0-9]{2})|(?:[1-9]?[0-9]))){3}))\]))$/iD';
+  if ($form['#op'] == 'add') {
+  	$value = $form_state['values']['field_agency_contacts']['und']['form']['field_email']['und'][0]['value'];
+	$insert = '';
+  }
+  else {
+  	foreach ($form_state['values']['field_agency_contacts']['und']['entities'] as $key => $sub_form){
+  	  if (isset($form_state['values']['field_agency_contacts']['und']['entities'][$key]['form'])) {
+  	  	$value = $form_state['values']['field_agency_contacts']['und']['entities'][$key]['form']['field_email']['und'][0]['value'];
+		$insert = "[entities][" . $key ."]";
+		break;
+  	  }
+  	}
+  }
+  if ($value != '') {
+    if (!preg_match($regex, $value)) {
+      form_set_error('field_agency_contacts][und]' . $insert . '[form][field_email][und][0][value', t('Not a valid email address'));
+    }
+  }
 }
 
 /**
 * Implements hook_form_submit for "agencies" form
 */
 function referral_agencies_form_submit (&$form, &$form_state) {
-  $form_state['rebuild'] = $form_state['plan_rebuild'];
   
-  $cache = dispute_referral_get_page_cache('case_data');
-  // Check if submit is being run for the second time (when finish is confirmed)
-  if (!isset($cache->agencies_submitted)) {
-    $node = node_load($cache->ewrapper->nid->value());
+  if (!isset($form_state['#confirm_flag'])) {
+  	$form_state['rebuild'] = TRUE;
+    $cache = dispute_referral_get_page_cache('case_data');
+    $node = node_load($cache->nid);
   
     // Update value for agencies involved
     $submit_options = array(
@@ -696,11 +919,14 @@ function referral_agencies_form_submit (&$form, &$form_state) {
   
     /// set flag to prevent extra submit for agencies form
     $cache->agencies_submitted = TRUE;
-	
 	//save updated case node
     $cache->ewrapper->save();
+	$form_state['#confirm_flag'] = TRUE;
   }
-}
+  else {
+	$form_state['rebuild'] = FALSE;
+  }
+  }
 
 /**
 * Implements hook_inline_entity_form_table_fields_alter to change the columns
@@ -764,7 +990,7 @@ function _fix_subform_back_button(&$form) {
  */
 function _fetch_default_value ($field_name, $cache, $null_value = NULL) {
   $info = field_info_field($field_name);
-  $node = node_load($cache->ewrapper->nid->value());
+  $node = node_load($cache->nid);
   if (isset($node->$field_name)  && !empty($node->$field_name)) {
   	switch($info['type']) {
 	  case 'date':
@@ -809,41 +1035,30 @@ function referral_create_referral(){
   $lang_name = $language->language;
   $u_wrapper = entity_metadata_wrapper('user', $user);
   $cache = dispute_referral_get_page_cache('case_data');
-  // Set initial values including bundla name
-  if (!isset($cache->nid)) {
+  // Check if there's a nid in cache and, if so, whether it 
+  // points to a valid node.  If not we make a new one.
+  $missing_node = FALSE;
+  if (isset($cache->nid) && !node_load($cache->nid)){
+	$missing_node = TRUE;
+  }
+  if (!isset($cache->nid) || $missing_node) {
+  	// Set initial values including bundle name
     $node_values = array(
       'status' => 0,
       'comment' => 0,
       'promote' => 0,
       'language' => $lang_name,
       'type' => 'case_management_case',
+      'title' => 'New referral',
       'uid' => $user->uid,
     );
+	// Create the node, create an entity metadata wrapper and store references in cache object
 	$node = entity_create('node', $node_values);
-	node_save($node);
+	node_save($node);  // nid allocated on save
 	$cache->nid = $node->nid;
 	$cache->ewrapper = entity_metadata_wrapper('node', $node);
-	
-	// create a title by combining organisation name, referrer's last name and a the first
-	//six characters of a hash value to give a practically unique reference
-	$case_title = $u_wrapper->field_organisation->name->value() . ' - ';
-    $case_title .= $u_wrapper->field_last_name->value() . ' - ';
-    $case_title .= substr(sha1($u_wrapper->field_first_name->value() . time()), 0, 6);
-    $cache->ewrapper->title->set($case_title);
-	
-	// Set today as the value for referral date 
-	$referred_date = new DateTime();
-    $node->field_referred_date[LANGUAGE_NONE][0] = array(
-      'value' => date_format($referred_date, 'Y-m-d'),
-      'timezone' => drupal_get_user_timezone(),
-      'timezone_db' => date_default_timezone(),
-    );
-	
-	// Set the status of the case as "referred"
-	$case_status_term = taxonomy_get_term_by_name('referred', 'case_status');
-    $cache->ewrapper->field_case_status->set(key($case_status_term));
-    dispute_referral_set_page_cache('case_data', $cache);
-	node_save($node);
+	$cache->ewrapper->save();
+	dispute_referral_set_page_cache('case_data', $cache);
   }
 }
 
@@ -852,35 +1067,6 @@ function build_case_render_array($entity) {
   global $language;
   $lang_name = $language->language;
   return node_view($entity, 'full', $lang_name);
-  /*$render_array = array();
-  $render_array['body'] = field_view_field('node', $entity, 'body', 'full', $lang_name);
-  if (isset($entity->field_origin_date)) {
-  	$render_array['field_origin_date'] = field_view_field('node', $entity, 'field_origin_date', 'full', $lang_name);
-  }
-  if (isset($entity->field_factor_summary)) {
-  	$render_array['field_factor_summary'] = field_view_field('node', $entity, 'field_factor_summary', 'full', $lang_name);
-  }
-  if (isset($entity->field_agencies_involved)) {
-  	//$render_array['field_agencies_involved'] = field_view_field('node', $entity, 'field_agencies_involved', 'full', $lang_name);
-  }
-  
-  
-  if (isset($entity->field_issues)) {
-  	$render_array['field_issues'] = field_view_field('node', $entity, 'field_issues', 'full', $lang_name);
-  }
-  if (isset($entity->field_party_actions)) {
-  	$render_array['field_party_actions'] = field_view_field('node', $entity, 'field_party_actions', 'full', $lang_name);
-  }
-  if (isset($entity->field_agency_actions)) {
-  	$render_array['field_agency_actions'] = field_view_field('node', $entity, 'field_agency_actions', 'full', $lang_name);
-  }
-  if (isset($entity->field_agency_contacts)) {
-  	$render_array['field_agency_contacts'] = field_view_field('node', $entity, 'field_agency_contacts', 'full', $lang_name);
-  }
-  $render_array['field_violence_summary'] = field_view_field('node', $entity, 'field_violence_summary', 'full', $lang_name);
-  $render_array['field_asb_summary'] = field_view_field('node', $entity, 'field_asb_summary', 'full', $lang_name);
-
-  return $render_array;*/
 }
 
 
